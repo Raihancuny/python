@@ -6,8 +6,7 @@ warnings.filterwarnings('ignore')
 
 
 select_res = '(backbone and (resid 22 173 194 226) and segid NDHA) \
-                                           or (backbone and (resid 87) and segid NDHC) or\                                                       (backbone and (resid 18 19) and segid NDHH) or \
-                                           (backbone and (resid 138) and segid NDHG)'
+                                           or (backbone and (resid 87) and segid NDHC) or\(backbone and (resid 18 19) and segid NDHH) or \(backbone and (resid 138) and segid NDHG)'
 
 
 ## name_label = ["apo", "MQ", "Quinol"]
