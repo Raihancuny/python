@@ -2,6 +2,7 @@
 _notebooks/
 _sandbox
 _tmp
+*/ms_out/
 .github/ISSUE_TEMPLATE/
 
 *tests/*.log
@@ -172,7 +173,3 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
-
-# Test folder
-4lzt/
-tests/

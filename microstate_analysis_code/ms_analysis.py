@@ -1,5 +1,9 @@
 #!/usr/bin/env python
+"""
+This version of ms_analysis.py comes from Stable_MCCE.
+An updated version can be found in 
 
+"""
 import sys
 import math
 import numpy as np
@@ -226,8 +230,6 @@ def groupms_byconfid(microstates, confids):
     return ingroup, outgroup
 
 
-
-
 def ms_energy_stat(microstates):
     """
     Given a list of microstates, find the lowest energy, average energy, and highest energy
@@ -270,7 +272,6 @@ def ms_convert2occ(microstates):
     return occ
 
 
-
 def ms_counts(microstates):
     """
     Calculate total counts of microstates
@@ -283,7 +284,7 @@ def ms_counts(microstates):
 
 
 def ms_charge(ms):
-    "Compute microstate charge"
+    """Compute microstate charge"""
     crg = 0.0
     for ic in ms.state:
         crg += conformers[ic].crg
@@ -312,7 +313,6 @@ def ms_convert2sumcrg(microstates, free_res):
     return charges
 
 
-
 def read_conformers():
     conformers = []
     lines = open("head3.lst").readlines()
@@ -326,14 +326,12 @@ def read_conformers():
 
 
 def e2occ(energies):
-    "Given a list of energy values in unit Kacl/mol, calculate the occupancy by Boltzmann Distribution."
+    """Given a list of energy values in Kcal/mol units, calculate the occupancy
+    by Boltzmann Distribution."""
     e = np.array(energies)
     e = e - min(e)
     Pi_raw = np.exp(-Kcal2kT*e)
-    Pi_sum = sum(Pi_raw)
-    Pi_norm = Pi_raw/Pi_sum
-
-    return Pi_norm
+    return Pi_raw/sum(Pi_raw)
 
 
 def bhata_distance(prob1, prob2):
@@ -344,7 +342,7 @@ def bhata_distance(prob1, prob2):
         d = d_max
     else:
         bc = sum(np.sqrt(p1 * p2))
-    #    print(bc, np.exp(-d_max))
+        # print(bc, np.exp(-d_max))
         if bc <= np.exp(-d_max):
             d = d_max
         else:
@@ -354,12 +352,13 @@ def bhata_distance(prob1, prob2):
 
 
 def whatchanged_conf(msgroup1, msgroup2):
-    "Given two group of microstates, calculate what changed at conformer level."
+    """Given two group of microstates, calculate what changed at conformer level."""
     occ1 = ms_convert2occ(msgroup1)
     occ2 = ms_convert2occ(msgroup2)
 
     all_keys = set(occ1.keys())
     all_keys |= set(occ2.keys())
+    # FIX: clearer: all_keys = set(occ1.keys()) | set(occ2.keys())
 
     all_keys = list(all_keys)
     all_keys.sort()
@@ -379,7 +378,7 @@ def whatchanged_conf(msgroup1, msgroup2):
 
 
 def whatchanged_res(msgroup1, msgroup2, free_res):
-    "Return a list of Bhatachaya Distance of free residues."
+    """Return a list of Bhatachaya Distance of free residues."""
     occ1 = ms_convert2occ(msgroup1)
     occ2 = ms_convert2occ(msgroup2)
 
@@ -400,8 +399,9 @@ def whatchanged_res(msgroup1, msgroup2, free_res):
 
     return bhd
 
-conformers = read_conformers()
 
+# populate conformers list; assumes head3.lst in call dir
+conformers = read_conformers()
 
 
 if __name__ == "__main__":
