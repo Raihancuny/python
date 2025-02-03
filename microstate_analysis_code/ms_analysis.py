@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 This version of ms_analysis.py comes from Stable_MCCE.
-An updated version can be found in 
+An updated version is https://github.com/GunnerLab/MCCE4/blob/main/bin/ms_analysis.py
 
 """
 import sys
