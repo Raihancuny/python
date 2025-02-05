@@ -1,7 +1,7 @@
 # local stuff
 _notebooks/
 _sandbox
-_tmp
+_tmp/
 tmp.txt
 ms_analysis.py
 weighted_correlation.py
