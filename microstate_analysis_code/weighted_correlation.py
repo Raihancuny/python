@@ -8,10 +8,15 @@ CORR_METHODS = ["pearson", "spearman"]
 
 
 class WeightedCorr:
-    def __init__(self,
-                 xyw: pd.DataFrame = None,
-                 x: pd.Series = None, y: pd.Series = None, w: pd.Series = None,
-                 df: pd.DataFrame = None, wcol: str = None):
+    def __init__(
+        self,
+        xyw: pd.DataFrame = None,
+        x: pd.Series = None,
+        y: pd.Series = None,
+        w: pd.Series = None,
+        df: pd.DataFrame = None,
+        wcol: str = None,
+    ):
         """Weighted Correlation class.
         To instantiate WeightedCorr, either supply:
           1. xyw as pd.DataFrame,
@@ -72,6 +77,7 @@ class WeightedCorr:
     def _pearson(self, x=None, y=None):
         x, y = (self.x, self.y) if ((x is None) and (y is None)) else (x, y)
         mx, my = (np.sum(i * self.w) / np.sum(self.w) for i in [x, y])
+
         return self._wcov(x, y, [mx, my]) / np.sqrt(
             self._wcov(x, x, [mx, mx]) * self._wcov(y, y, [my, my])
         )
@@ -87,7 +93,7 @@ class WeightedCorr:
         x, y = (self.x, self.y) if ((x is None) and (y is None)) else (x, y)
         return self._pearson(self._wrank(x), self._wrank(y))
 
-    def __call__(self, method: str = "pearson") -> Union[float, ]:
+    def __call__(self, method: str = "pearson") -> Union[float,]:
         """
         WeightedCorr call method.
         Args:
@@ -107,9 +113,7 @@ class WeightedCorr:
             return cor()
         else:
             # run the method over matrix
-            out = pd.DataFrame(np.nan,
-                               index=self.df.columns,
-                               columns=self.df.columns)
+            out = pd.DataFrame(np.nan, index=self.df.columns, columns=self.df.columns)
             for i, x in enumerate(self.df.columns):
                 for j, y in enumerate(self.df.columns):
                     if i >= j:

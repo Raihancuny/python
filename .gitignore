@@ -2,6 +2,10 @@
 _notebooks/
 _sandbox
 _tmp
+tmp.txt
+ms_analysis.py
+weighted_correlation.py
+
 */ms_out/
 .github/ISSUE_TEMPLATE/
 
