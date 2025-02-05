@@ -5,7 +5,7 @@ _tmp
 tmp.txt
 ms_analysis.py
 weighted_correlation.py
-
+*.pdf
 */ms_out/
 .github/ISSUE_TEMPLATE/
 
