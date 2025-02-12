@@ -39,7 +39,8 @@ logger = logging.getLogger(__name__)
 
 
 ph2Kcal = 1.364
-Kcal2kT = 1.688
+half_ph = ph2Kcal/2
+
 
 EMPTY_CONFS_LIST = """Empty conformers list. It is likely that a local head3.lst file was not found.
 Try reloading using the correct path to head3.lst:
@@ -70,7 +71,6 @@ class Conformer:
     """Minimal Conformer class for use in microstate analysis.
     Attributes: iconf, confid, ires, resid, crg.
     """
-
     def __init__(self):
         self.iconf = 0
         self.confid = ""
@@ -328,9 +328,9 @@ class MSout:
         """
         ebounds = {
             1: (None, None),
-            2: (self.lowest_E, self.lowest_E + 1.36),
-            3: (self.average_E - 0.68, self.average_E + 0.68),
-            4: (self.highest_E - 1.36, self.highest_E),
+            2: (self.lowest_E, self.lowest_E + ph2Kcal),
+            3: (self.average_E - half_ph, self.average_E + half_ph),
+            4: (self.highest_E - ph2Kcal, self.highest_E),
         }
         return ebounds
 
@@ -396,7 +396,14 @@ class MSout:
             reverse=sort_reverse,
         )
 
+    def __str__(self):
+        return (f"Number of microstates: {self.N_ms:,}\nNumber of unique microstates: "
+                f"{self.N_uniq:,}\nEnergies: lowest_E: {self.lowest_E:,.2f}; average_E: "
+                f"{self.average_E:,.2f}; highest_E: {self.highest_E:,.2f}"
+                )
 
+
+# TODO: Add corr cutoff to class?
 class WeightedCorr:
     def __init__(
         self,
@@ -533,200 +540,60 @@ def get_ms_crg(ms: Microstate, conformers: list) -> Union[float, None]:
     return ms_charge(ms, confs_list=conformers)
 
 
-def groupms_byenergy(microstates: list, ticks: List[float]) -> list:
+def iconf2crg(conformers: list) -> dict:
+    """Map mcce conformers indices to their charges.
     """
-    Group the microstates' energies into bands provided in `ticks`.
-    Args:
-      microstates (list): List of microstates
-      ticks (list(float)): List of energies; will be sorted.
+    return {conf.iconf: conf.crg for conf in conformers}
+
+
+def iconf2ires(free_residues: list) -> dict:
+    """Map conf indices to parent res index.
+    Note: Reverse mapping of MSout.free_residue.
     """
-    N = len(ticks)
-    ticks.sort()
-    ticks.append(1.0e100)  # add a big number as the last boundary
-    resulted_bands = [[] for i in range(N)]
-
-    for ms in microstates:
-        it = -1
-        for itick in range(N):
-            if ticks[itick] <= ms.E < ticks[itick + 1]:
-                it = itick
-                break
-        if it >= 0:
-            resulted_bands[it].append(ms)
-
-    return resulted_bands
+    d = {}
+    for i, fres in enumerate(free_residues):
+        for iconf in fres:
+            d[iconf] = i
+    return d
 
 
-def groupms_byiconf(microstates: list, iconfs: list) -> tuple:
+def free_res2sumcrg_df(microstates: Union[dict, list], free_res: list, conformers: list) -> pd.DataFrame:
     """
-    Divide the microstates by the conformers indices provided in `iconfs`
-    into 2 groups: the first contains one of the given conformers, the
-    second one contains none of the listed conformers.
-    Args:
-      microstates (list): List of microstates
-      iconfs (list): List of conformer indices.
-    Return:
-      A 2-tuple: Microstates with any of `iconfs`, microstates with none
-    """
-    ingroup = []
-    outgroup = []
-    for ms in microstates:
-        contain = False
-        for ic in iconfs:
-            if ic in ms.state:
-                ingroup.append(ms)
-                contain = True
-                break
-        if not contain:
-            outgroup.append(ms)
-
-    return ingroup, outgroup
-
-
-def groupms_byconfid(microstates: list, confids: list) -> tuple:
-    """
-    Divide the microstates by the conformers ids provided in `confids`
-    into 2 groups: the first contains ALL of the given conformers, the
-    second one contains does not.
-    Note: An ID is a match if it is a substring of the conformer name.
-    Args:
-      microstates (list): List of microstates
-      confids (list): List of conformer ids.
-    Return:
-      A 2-tuple: Microstates with all of `confids`, microstates with some or none.
-    """
-    ingroup = []
-    outgroup = []
-    for ms in microstates:
-        contain = True
-        names = [conformers[ic].confid for ic in ms.state]
-        for confid in confids:
-            innames = False
-            for name in names:
-                if confid in name:
-                    innames = True
-                    break
-            contain = contain and innames
-        if contain:
-            ingroup.append(ms)
-        else:
-            outgroup.append(ms)
-
-    return ingroup, outgroup
-
-
-def ms_energy_stat(microstates: list) -> tuple:
-    """
-    Return the lowest, average, and highest energies of the listed
-    microstates.
-    """
-    ms = next(iter(microstates))
-    lowest_E = highest_E = ms.E
-    N_ms = 0
-    total_E = 0.0
-    for ms in microstates:
-        if lowest_E > ms.E:
-            lowest_E = ms.E
-        elif highest_E < ms.E:
-            highest_E = ms.E
-        N_ms += ms.count
-        total_E += ms.E * ms.count
-
-    average_E = total_E / N_ms
-
-    return lowest_E, average_E, highest_E
-
-
-def ms_convert2occ(microstates: list) -> dict:
-    """
-    Given a list of microstates, convert to conformer occupancy
-    for conformers that appear at least once in the microstates.
-    Return:
-      A dict: {iconf: occ}
-    """
-    # TODO: use Counter
-    occurence = {}  # dict of conformer occurence
-    occ = {}
-    N_ms = 0
-    for ms in microstates:
-        N_ms += ms.count
-        for ic in ms.state:
-            if ic in occurence:
-                occurence[ic] += ms.count
-            else:
-                occurence[ic] = ms.count
-
-    for key in occurence:
-        occ[key] = occurence[key] / N_ms
-
-    return occ
-
-
-def ms_convert2sumcrg(microstates: list, free_res: list, conformers: list = conformers) -> Union[list, None]:
-    """
-    Given a list of microstates, convert to net charge of each free residue.
-    Uses module's conformers list by default.
+    Given a list of microstates and free residues, convert to net charge of each free residue
+    into a pandas.DataFrame.
     Returns:
-      None if conformers list is empty, else the list of net charges.
+      None if conformers list is empty.
     """
     if not conformers:
         logger.error(EMPTY_CONFS_LIST)
         return None
 
-    iconf2ires = {}
-    for i_res in range(len(free_res)):
-        for iconf in free_res[i_res]:
-            iconf2ires[iconf] = i_res
+    if isinstance(microstates, dict):
+        microstates = list(microstates.values())
 
-    charges_total = [0.0 for i in range(len(free_res))]
+    charges_total = defaultdict(float)
     N_ms = 0
     for ms in microstates:
         N_ms += ms.count
         for ic in ms.state:
-            ir = iconf2ires[ic]
-            charges_total[ir] += conformers[ic].crg * ms.count
+            charges_total[conformers[ic].resid] += conformers[ic].crg * ms.count
 
-    charges = [x / N_ms for x in charges_total]
+    for x in charges_total:
+        tot = charges_total[x]
+        charges_total[x] = round(tot/N_ms, 1)
 
-    return charges
-
-
-def e2occ(energies: list) -> float:
-    """Given a list of energy values in unit Kacl/mol,
-    calculate the occupancy by Boltzmann Distribution.
-    """
-    e = np.array(energies)
-    e = e - min(e)
-    Pi_raw = np.exp(-Kcal2kT * e)
-
-    return Pi_raw / sum(Pi_raw)
-
-
-def bhata_distance(prob1: list, prob2: list) -> float:
-    """Bhattacharyya distance between 2 probability distributions."""
-    d_max = 10000.0  # Max possible value
-    p1 = np.array(prob1) / sum(prob1)
-    p2 = np.array(prob2) / sum(prob2)
-    if len(p1) != len(p2):
-        d = d_max
-    else:
-        bc = sum(np.sqrt(p1 * p2))
-        if bc <= np.exp(-d_max):
-            d = d_max
-        else:
-            d = -np.log(bc)
-
-    return d
+    return pd.DataFrame(charges_total.items(), columns=["Residue", "crg"])
 
 
 def free_residues_df(free_res: list, conformers: list, colname: str = "FreeRes") -> pd.DataFrame:
     """Return the free residues' ids in a pandas DataFrame."""
-    free_residues = [conformers[res[0]].resid for res in free_res]
+    return pd.DataFrame([conformers[res[0]].resid for res in free_res],
+                        columns=[colname]
+                        )
 
-    return pd.DataFrame(free_residues, columns=[colname])
 
-
-def fixed_residues_charge(conformers: list, fixed_iconfs: list) -> Tuple[float, dict]:
+# TODO: Deprecate: use fixed_residues_info instead
+def fixed_residues_charge0(conformers: list, fixed_iconfs: list) -> Tuple[float, dict]:
     """
     Return:
       A 2-tuple:
@@ -748,10 +615,13 @@ def fixed_residues_charge(conformers: list, fixed_iconfs: list) -> Tuple[float, 
 
 def fixed_residues_info(
     fixed_iconfs: list, conformers: list, res_of_interest: list = IONIZABLES
-) -> Tuple[float, pd.DataFrame]:
+) -> Tuple[float, pd.DataFrame, dict]:
     """
-    Return a 2-tuple: fixed res background charge,
-                      fixed res crg df for res listed in res_of_interest.
+    Return a 3-tuple: 0: background charge from all fixed residues;
+                      1: fixed res crg df for res listed in res_of_interest, if any;
+                      2: dict: maps fixed resid to crg (source for item 1).
+    Note:
+      res_of_interest defaults to the list of ionizable residues.
     """
     dd = defaultdict(float)
     for conf in conformers:
@@ -762,55 +632,18 @@ def fixed_residues_info(
         dd = {k: dd[k] for k in dd if k[:3] in res_of_interest}
     fixed_res_crg_df = pd.DataFrame(dd.items(), columns=["Residue", "crg"])
 
-    return fixed_backgrd_charge, fixed_res_crg_df
+    return fixed_backgrd_charge, fixed_res_crg_df, dd
 
 
-def whatchanged_conf(msgroup1: list, msgroup2: list) -> dict:
-    """Given two group of microstates, calculate what changed at conformer level."""
-    occ1 = ms_convert2occ(msgroup1)
-    occ2 = ms_convert2occ(msgroup2)
-
-    all_keys = list(set(occ1.keys()) | set(occ2.key()))
-    all_keys.sort()
-    diff_occ = {}
-    for key in all_keys:
-        if key in occ1:
-            p1 = occ1[key]
-        else:
-            p1 = 0.0
-        if key in occ2:
-            p2 = occ2[key]
-        else:
-            p2 = 0.0
-        diff_occ[key] = p2 - p1
-
-    return diff_occ
-
-
-def whatchanged_res(msgroup1: list, msgroup2: list, free_res: list) -> list:
-    """Return a list of Bhattacharyya distance of free residues."""
-    occ1 = ms_convert2occ(msgroup1)
-    occ2 = ms_convert2occ(msgroup2)
-
-    bhd = []
-    for res in free_res:
-        p1 = []
-        p2 = []
-        for ic in res:
-            if ic in occ1:
-                p1.append(occ1[ic])
-            else:
-                p1.append(0.0)
-            if ic in occ2:
-                p2.append(occ2[ic])
-            else:
-                p2.append(0.0)
-        bhd.append(bhata_distance(p1, p2))
-
-    return bhd
-
-
-def get_free_res_ids(conformers: list, free_residues: list) -> list:
+#TODO: Deprecate: use free_residues_df instead
+def get_free_res_ids0(conformers: list, free_residues: list) -> list:
+    """Return a list of free residues' "resid" using the first conformer
+    index in each residue's conformers (sublist):
+    Note:
+     The free_residues list is either MSout.free_residues, or is a list with the sane
+     structure, i.e.: [[0,1], [4,6,7], ...]: the 1st residue has 2 conformers with indices
+     [0,1]; the 2nd residue has 3 conformers with indices [4,6,7].
+    """
     return [conformers[confs[0]].resid for confs in free_residues]
 
 
@@ -830,13 +663,6 @@ def ms2crgms(ll: list, dd: dict) -> list:
     ]
 
     return crg_lst
-
-
-def iconf2crg(conformers: list) -> dict:
-    """Map mcce conformers indices to their charges.
-    {conf.iconf:conf.crg for conf in msa.conformers}
-    """
-    return {conf.iconf: conf.crg for conf in conformers}
 
 
 def rename_order_residues(crgms_data: pd.DataFrame):
@@ -933,7 +759,7 @@ def find_uniq_crgms_count_order(crg_list_ms: list, begin_energy: float = None, e
     elif begin_energy and end_energy:
         # both energy bounds given; filter the input list energy accordingly:
         crg_list_ms = [[x[0], x[1], x[2]] for x in crg_list_ms if x[0] >= begin_energy and x[0] <= end_energy]
-        logger.info(f"Number of filtered charge ms: {len(crg_list_ms):,}")
+        logger.info(f"Number of energy-filtered charge ms: {len(crg_list_ms):,}")
     else:
         sys.exit("Both energy bounds are needed.")
 
@@ -985,7 +811,17 @@ def find_uniq_crgms_count_order(crg_list_ms: list, begin_energy: float = None, e
 findUniqueCrgmsCountOrder = find_uniq_crgms_count_order
 
 
-def combine_free_fixed_residues(fixed_residue_df: pd.DataFrame, free_res_crg_count_df: pd.DataFrame) -> pd.DataFrame:
+def combine_all_free_fixed_residues(free_res_crg_df: pd.DataFrame, fixed_res_crg_df: pd.DataFrame) -> pd.DataFrame:
+    free_res_crg_df["is_fixed"] = False
+    fixed_res_crg_df["is_fixed"] = True
+    df = pd.concat([free_res_crg_df, fixed_res_crg_df])
+    df.set_index("Residue", inplace=True)
+
+    return df.T
+
+
+# TODO: Deprecate?
+def combine_free_fixed_residues0(free_res_crg_count_df: pd.DataFrame, fixed_residue_df: pd.DataFrame) -> pd.DataFrame:
 
     df_fixed_res_crg = fixed_residue_df.T
     df_fixed_res_crg.columns = df_fixed_res_crg.iloc[0]
@@ -1051,22 +887,30 @@ def filter_weightedcorr(df: pd.DataFrame, cutoff: float = 0.0) -> pd.DataFrame:
     return wc_df
 
 
-def correlation_data_parsing(df: pd.DataFrame) -> pd.DataFrame:
-    all_crg_count = df.iloc[:, :-2]
-    all_crg_count = all_crg_count.T
-    all_crg_count["std"] = all_crg_count.std(axis=1).round(3)
-    all_crg_count_std = all_crg_count.loc[all_crg_count["std"] != 0].T[:-1].reset_index(drop=True)
-    logger.info(f"Number of residues that change protonation state: {len(all_crg_count_std.columns)-1}")
+def changing_residues_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Return transposed df minus unchanging residues as per stdev."""
 
-    return all_crg_count_std
+    # exclude Occupancy & Sum_crg_protein columns and transpose:
+    new_df = df.iloc[:,:-2].T
+    sorted_cols = sorted(list(new_df.columns))
+    new_df = new_df[sorted_cols]
+    new_df["std"] = new_df.std(axis=1).round(3)
+    msk = new_df["std"] != 0
+    change_df = new_df.loc[msk].T[:-1].reset_index(drop=True)
+    # subtract 'Count' column:
+    logger.info(f"Number of residues that change protonation state: {len(change_df.columns)-1}")
+
+    return change_df
+    
 
 
 # >>> plotting functions ....................................
 def jointplot(
     charge_ms_files: list,
     background_charge: float,
+    fig_title: str,
     out_dir: str,
-    fig_name: str,
+    save_name: str,
     show: bool = False,
 ):
     """Output a joint plot with histogram."""
@@ -1108,13 +952,17 @@ def jointplot(
     # Adjust layout and title
     g1.fig.subplots_adjust(top=0.9)
 
-    # FIX: suptitle
-    g1.fig.suptitle("All Microstates Energy (dry2_semi)_pH7", fontsize=16)
+    if fig_title:
+        g1.fig.suptitle(fig_title, fontsize=16)
 
-    mc_energy_fig = Path(out_dir).joinpath(fig_name)
+    fig_fp = Path(out_dir).joinpath(save_name)
     # Save the figure
-    g1.savefig(mc_energy_fig, dpi=600, bbox_inches="tight")
-    logger.info(f"Figure saved: {mc_energy_fig!s}")
+    g1.savefig(fig_fp, dpi=600, bbox_inches="tight")
+    logger.info(f"Figure saved: {fig_fp!s}")
+    if fig_fp.suffix != ".png":
+        fig_png = fig_fp.with_suffix(".png")
+        g1.savefig(fig_png, dpi=300, bbox_inches="tight")
+        logger.info(f"Figure saved: {fig_png}")
     if show:
         plt.show()
 
@@ -1161,6 +1009,10 @@ def plots_unique_crg_histogram(
     fig_fp = out_dir.joinpath(save_name)
     g1.savefig(fig_fp, dpi=300, bbox_inches="tight")
     logger.info(f"Plot of unique charge distribution saved as {fig_fp}")
+    if fig_fp.suffix != ".png":
+        fig_png = fig_fp.with_suffix(".png")
+        g1.savefig(fig_png, dpi=300, bbox_inches="tight")
+        logger.info(f"Plot of unique charge distribution saved as {fig_png}")
     if show:
         plt.show()
 
@@ -1194,6 +1046,10 @@ def plot_hist_by_ms_energy(ms_by_enrg: list, out_dir: Path, save_name: str = "en
     fig_fp = out_dir.joinpath(save_name)
     fig.savefig(fig_fp, dpi=300, bbox_inches="tight")
     logger.info(f"Histogram figure saved as {fig_fp}")
+    if fig_fp.suffix != ".png":
+        fig_png = fig_fp.with_suffix(".png")
+        fig.savefig(fig_png, dpi=300, bbox_inches="tight")
+        logger.info(f"Histogram figure saved as {fig_png}")
     if show:
         plt.show()
 
@@ -1226,12 +1082,14 @@ def corr_heat_map(df_corr: pd.DataFrame, out_dir: Path, save_name: str = "corr.p
     fig_fp = out_dir.joinpath(save_name)
     plt.savefig(fig_fp, dpi=300, bbox_inches="tight")
     logger.info(f"Correlation heat map saved as {fig_fp}")
+    if fig_fp.suffix != ".png":
+        fig_png = fig_fp.with_suffix(".png")
+        plt.savefig(fig_png, dpi=300, bbox_inches="tight")
+        logger.info(f"Correlation heat map saved as: {fig_png}")
     if show:
         plt.show()
 
     return
-
-
 # <<< plotting functions - end ....................................
 
 
@@ -1251,19 +1109,18 @@ def check_mcce_input_files(mcce_dir: Path, ph_pt: str) -> tuple:
     return h3_fp, msout_fp
 
 
-def crg_msa_with_correlation(
-    mcce_dir: Path, ph_pt: int = 7, res_of_interest: list = IONIZABLES, corr_cutoff: float = 0.0
-):
+def crg_msa_with_correlation(mcce_dir: Path, ph_pt: int = 7,
+                             res_of_interest: list = IONIZABLES,
+                             corr_cutoff: float = 0.0):
+    """Wrapper to process charge ms with correlation.
+    """
     h3_fp, msout_fp = check_mcce_input_files(mcce_dir, ph_pt)
 
     conformers = read_conformers(h3_fp)
+    logger.info(f"Number of conformers: {len(conformers):,}\n")
+
     mc = MSout(msout_fp)
-    msg = (
-        f"\n\tNumber of conformers: {len(conformers):,}\n"
-        + f"\tNumber of microstates: {mc.N_ms:,}\n"
-        + f"\tNumber of unique microstates: {mc.N_uniq:,}\n"
-    )
-    logger.info(msg)
+    logger.info(mc)
 
     ms_orig_lst = [[ms.E, ms.count, ms.state] for ms in mc.sort_microstates()]
 
@@ -1284,12 +1141,12 @@ def crg_msa_with_correlation(
     )
 
     res_crg_csv = mcce_dir.joinpath("all_res_crg.csv")
-    combine_free_fixed_residues(fixed_res_crg_df, free_res_crg_count_df).to_csv(res_crg_csv)
+    combine_all_free_fixed_residues(fixed_res_crg_df, free_res_crg_count_df).to_csv(res_crg_csv)
 
     res_crg_count_csv = mcce_dir.joinpath("all_res_crg_count.csv")
     free_res_crg_count_df.to_csv(res_crg_count_csv, header=True)
 
-    all_crg_count_std = correlation_data_parsing(free_res_crg_count_df)
+    all_crg_count_std = changing_residues_df(free_res_crg_count_df)
     df_renamed = rename_order_residues(all_crg_count_std)
     df_correlation = filter_weightedcorr(df_renamed, cutoff=corr_cutoff)
 
@@ -1325,7 +1182,7 @@ EXAMPLES:
         nargs="+",  # 1 or more, but cli will ask for at least 2
         type=str,
         default=IONIZABLES,
-        help="List of residues of interest; default: %(default)s.",
+        help="List of residues of interest; default: ionizable residues.",
     )
     p.add_argument("-corr_cutoff", type=float, default=0.0, help="Correlation cutoff value; default: %(default)s.")
 
@@ -1349,4 +1206,9 @@ def crgmsa_cli(argv=None):
 
 
 if __name__ == "__main__":
-    crgmsa_cli(sys.argv[1:])
+    #crgmsa_cli(sys.argv[1:])
+    # temp message:
+    sys.exit(("Cannot run main function until mechanism for naming "
+              "the output files & figure titles is in place.\n"
+              "Use 'run_ms_analysis.ipynb' instead.")
+             )
