@@ -21,10 +21,13 @@ import numpy as np
 import operator
 import pandas as pd
 from pathlib import Path
+import re
 import seaborn as sns
+import string
 import sys
 from scipy.stats import skewnorm, rankdata
-from typing import List, Tuple, Union
+from typing import Tuple, Union
+import warnings
 
 
 # log to screen
@@ -39,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 ph2Kcal = 1.364
-half_ph = ph2Kcal/2
+half_ph = ph2Kcal / 2
 
 
 EMPTY_CONFS_LIST = """Empty conformers list. It is likely that a local head3.lst file was not found.
@@ -67,10 +70,15 @@ res3_to_res1 = {
 }
 
 
+# For splitting a string with re. Remove punctuation and spaces:
+re_split_pattern = re.compile(r"[\s{}]+".format(re.escape(string.punctuation)))
+
+
 class Conformer:
     """Minimal Conformer class for use in microstate analysis.
     Attributes: iconf, confid, ires, resid, crg.
     """
+
     def __init__(self):
         self.iconf = 0
         self.confid = ""
@@ -108,16 +116,6 @@ def read_conformers(head3_path: str = "head3.lst") -> list:
     return conformers
 
 
-try:
-    # populate conformers list, if possible:
-    # conformers will be an empty list if:
-    # - module is imported or called outside of a MCCE output folder
-    # - head3.lst is missing.
-    conformers = read_conformers("head3.lst")
-except FileNotFoundError:
-    conformers = []
-
-
 def reader_gen(fpath: Path):
     """
     Generator function yielding a file line.
@@ -140,7 +138,6 @@ class Microstate:
 
     def _check_operand(self, other):
         """Fails on missing attribute."""
-
         if not (hasattr(other, "state") and hasattr(other, "E") and hasattr(other, "count")):
             return NotImplemented("Comparison with non Microstate object.")
         return
@@ -315,6 +312,7 @@ class MSout:
             return sum([conf.crg for conf in data if conf.iconf in self.fixed_iconfs])
         return sum(data.values())
 
+    # TODO: Keep?
     def get_preset_energy_bounds(self) -> dict:
         """Return a dict to store typical energy bounds that can be used to process
         charge microstates; e.g. save the unique charge microstates that are within these
@@ -397,13 +395,13 @@ class MSout:
         )
 
     def __str__(self):
-        return (f"Number of microstates: {self.N_ms:,}\nNumber of unique microstates: "
-                f"{self.N_uniq:,}\nEnergies: lowest_E: {self.lowest_E:,.2f}; average_E: "
-                f"{self.average_E:,.2f}; highest_E: {self.highest_E:,.2f}"
-                )
+        return (
+            f"Number of microstates: {self.N_ms:,}\nNumber of unique microstates: "
+            f"{self.N_uniq:,}\nEnergies: lowest_E: {self.lowest_E:,.2f}; average_E: "
+            f"{self.average_E:,.2f}; highest_E: {self.highest_E:,.2f}"
+        )
 
 
-# TODO: Add corr cutoff to class?
 class WeightedCorr:
     def __init__(
         self,
@@ -413,6 +411,7 @@ class WeightedCorr:
         w: pd.Series = None,
         df: pd.DataFrame = None,
         wcol: str = None,
+        cutoff: float = 0.0,
     ):
         """Weighted Correlation class.
         To instantiate WeightedCorr, either supply:
@@ -426,13 +425,17 @@ class WeightedCorr:
           w: pd.Series (n,) containing weights;
           df: pd.Dataframe (n,m+1) containing m phenotypes and a weight column;
           wcol: str column of the weight in the df argument.
+          cutoff: if given, return values whose absolute values are greater.
         Usage:
           ```
-          # Define df, then get the weighted correlation:
+          # Define df, then get the weighted correlation; return non-zero values
+          # by default:
           ```
           wcorr = WeightedCorr(xyw=df[["xcol", "ycol", "wcol"]])(method='pearson')
           ```
         """
+        self.cutoff = cutoff
+
         if (df is None) and (wcol is None):
             if np.all([i is None for i in [xyw, x, y, w]]):
                 raise ValueError("No data supplied")
@@ -451,7 +454,9 @@ class WeightedCorr:
             if wcol not in df.columns:
                 raise KeyError("wcol not found in column names of df")
 
-            self.df = df.loc[:, [x for x in df.columns if x != wcol]]
+            cols = df.columns.to_list()
+            _ = cols.pop(cols.index("Count"))
+            self.df = df.loc[:, cols]
             self.w = pd.to_numeric(df.loc[:, wcol], errors="coerce")
 
         else:
@@ -460,11 +465,22 @@ class WeightedCorr:
     def _wcov(self, x, y, ms):
         return np.sum(self.w * (x - ms[0]) * (y - ms[1]))
 
-    def _pearson(self, x=None, y=None):
+    def _pearson(self, x=None, y=None) -> float:
         x, y = (self.x, self.y) if ((x is None) and (y is None)) else (x, y)
         mx, my = (np.sum(i * self.w) / np.sum(self.w) for i in [x, y])
 
-        return self._wcov(x, y, [mx, my]) / np.sqrt(self._wcov(x, x, [mx, mx]) * self._wcov(y, y, [my, my]))
+        # needed for unchanging values (fixed res):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
+            try:
+                wcov = self._wcov(x, y, [mx, my]) / np.sqrt(self._wcov(x, x, [mx, mx]) * self._wcov(y, y, [my, my]))
+            except RuntimeWarning:
+                wcov = 0
+
+        if abs(wcov) >= self.cutoff:
+            return wcov
+        else:
+            return 0
 
     def _wrank(self, x):
         (unique, arr_inv, counts) = np.unique(rankdata(x), return_counts=True, return_inverse=True)
@@ -475,7 +491,7 @@ class WeightedCorr:
         x, y = (self.x, self.y) if ((x is None) and (y is None)) else (x, y)
         return self._pearson(self._wrank(x), self._wrank(y))
 
-    def __call__(self, method: str = "pearson") -> Union[float,]:
+    def __call__(self, method: str = "pearson") -> Union[float, pd.DataFrame]:
         """
         WeightedCorr call method.
         Args:
@@ -491,20 +507,64 @@ class WeightedCorr:
 
         # define which of the defined methods to use:
         cor = {"pearson": self._pearson, "spearman": self._spearman}[method]
+
         if self.df is None:  # run the method over series
             return cor()
         else:
             # run the method over matrix
-            out = pd.DataFrame(np.nan, index=self.df.columns, columns=self.df.columns)
+            df_out = pd.DataFrame(np.nan, index=self.df.columns, columns=self.df.columns)
             for i, x in enumerate(self.df.columns):
                 for j, y in enumerate(self.df.columns):
                     if i >= j:
-                        out.loc[x, y] = cor(
+                        df_out.loc[x, y] = cor(
                             x=pd.to_numeric(self.df[x], errors="coerce"),
                             y=pd.to_numeric(self.df[y], errors="coerce"),
                         )
-                        out.loc[y, x] = out.loc[x, y]
-            return out
+                        df_out.loc[y, x] = df_out.loc[x, y]
+
+            if self.cutoff is not None:
+                # values will be all 0 when cutoff is applied in cor():
+                msk = df_out == 0
+                df_out = df_out.loc[~msk.all(axis=1), ~msk.all(axis=0)]
+
+            # Sort the correlation matrix by the sum of correlations
+            corr_sums = df_out.sum()
+            sorted_corr_matrix = df_out.loc[
+                corr_sums.sort_values(ascending=False).index, corr_sums.sort_values(ascending=False).index
+            ]
+
+            return sorted_corr_matrix
+
+
+def split_spunct(text, upper=True) -> list:
+    """Split text on space and punctuation."""
+    if not text:
+        return []
+    if upper:
+        text = text.upper()
+    return re.split(re_split_pattern, text)
+
+
+def sort_resoi_list(resoi_list: list) -> list:
+    """Return the input 'res of interest' list with ionizable residues in
+    the same order as msa.IONIZABLES, i.e.:
+    acid, base, polar, N term, C term, followed by user provided res, sorted.
+    """
+    if not resoi_list:
+        return []
+
+    userlst = [res.upper() for res in resoi_list]
+    ioniz = IONIZABLES.copy()
+
+    ioniz_set = set(ioniz)
+    sym_diff = ioniz_set.symmetric_difference(userlst)
+    new_res = sym_diff.difference(ioniz_set)
+    removal = sym_diff.difference(new_res)
+    if removal:
+        for res in removal:
+            ioniz.pop(ioniz.index(res))
+
+    return ioniz + sorted(new_res)
 
 
 def ms_counts(microstates: Union[dict, list]) -> int:
@@ -517,32 +577,17 @@ def ms_counts(microstates: Union[dict, list]) -> int:
         return sum(ms.count for ms in microstates)
 
 
-def ms_charge(ms: Microstate, confs_list: list = None) -> Union[float, None]:
-    """Compute microstate charge."""
-    if confs_list is None:
-        # default behavior: use conformers loaded on import
-        if conformers:
-            return sum(conformers[ic].crg for ic in ms.state)
-        else:
-            logger.error("Module conformers list is empty.")
-            return None
-    if confs_list:
-        return sum(confs_list[ic].crg for ic in ms.state)
+def get_ms_charge(ms: Microstate, conformers: list) -> Union[float, None]:
+    """Compute a microstate's net charge."""
+    if conformers:
+        return sum(conformers[ic].crg for ic in ms.state)
     else:
-        logger.error("Given conformers list is empty.")
+        logger.error("Module conformers list is empty.")
         return None
 
 
-def get_ms_crg(ms: Microstate, conformers: list) -> Union[float, None]:
-    """Compute microstate charge.
-    For backward compatibility.
-    """
-    return ms_charge(ms, confs_list=conformers)
-
-
 def iconf2crg(conformers: list) -> dict:
-    """Map mcce conformers indices to their charges.
-    """
+    """Map mcce conformers indices to their charges."""
     return {conf.iconf: conf.crg for conf in conformers}
 
 
@@ -580,37 +625,14 @@ def free_res2sumcrg_df(microstates: Union[dict, list], free_res: list, conformer
 
     for x in charges_total:
         tot = charges_total[x]
-        charges_total[x] = round(tot/N_ms, 1)
+        charges_total[x] = round(tot / N_ms, 1)
 
     return pd.DataFrame(charges_total.items(), columns=["Residue", "crg"])
 
 
 def free_residues_df(free_res: list, conformers: list, colname: str = "FreeRes") -> pd.DataFrame:
     """Return the free residues' ids in a pandas DataFrame."""
-    return pd.DataFrame([conformers[res[0]].resid for res in free_res],
-                        columns=[colname]
-                        )
-
-
-# TODO: Deprecate: use fixed_residues_info instead
-def fixed_residues_charge0(conformers: list, fixed_iconfs: list) -> Tuple[float, dict]:
-    """
-    Return:
-      A 2-tuple:
-      The net (background) charge contributed by the fixed residues in `fixed_iconfs`;
-      A dictionary: key=conf.resid, value=conf.crg.
-    """
-    fixed_res_crg_dict = {}
-    for conf in conformers:
-        if conf.iconf in fixed_iconfs:
-            if conf.resid not in fixed_res_crg_dict:
-                fixed_res_crg_dict[conf.resid] = conf.crg
-            else:
-                logger.error(f"ERROR: duplicated fixed residue: {conf.resid!r}")
-
-    net_charge = sum(fixed_res_crg_dict.values())
-
-    return net_charge, fixed_res_crg_dict
+    return pd.DataFrame([conformers[res[0]].resid for res in free_res], columns=[colname])
 
 
 def fixed_residues_info(
@@ -633,18 +655,6 @@ def fixed_residues_info(
     fixed_res_crg_df = pd.DataFrame(dd.items(), columns=["Residue", "crg"])
 
     return fixed_backgrd_charge, fixed_res_crg_df, dd
-
-
-#TODO: Deprecate: use free_residues_df instead
-def get_free_res_ids0(conformers: list, free_residues: list) -> list:
-    """Return a list of free residues' "resid" using the first conformer
-    index in each residue's conformers (sublist):
-    Note:
-     The free_residues list is either MSout.free_residues, or is a list with the sane
-     structure, i.e.: [[0,1], [4,6,7], ...]: the 1st residue has 2 conformers with indices
-     [0,1]; the 2nd residue has 3 conformers with indices [4,6,7].
-    """
-    return [conformers[confs[0]].resid for confs in free_residues]
 
 
 def ms2crgms(ll: list, dd: dict) -> list:
@@ -718,10 +728,6 @@ def rename_order_residues(crgms_data: pd.DataFrame):
     return file_out
 
 
-# aliased fn:
-renameOrderResidues = rename_order_residues
-
-
 def choose_res_data(df: pd.DataFrame, choose_res: list):
     """Group the df by the given list.
     Note: df must have a 'Count' column."""
@@ -763,52 +769,52 @@ def find_uniq_crgms_count_order(crg_list_ms: list, begin_energy: float = None, e
     else:
         sys.exit("Both energy bounds are needed.")
 
-    # unique charge as key and energy, count and order
     crg_all_count = {}
     unique_crg_state_order = 1
-    for array in crg_list_ms:
-        if tuple(array[2]) not in crg_all_count:
-            crg_all_count[(tuple(array[2]))] = [
-                array[1],
-                [array[0]],
-                [unique_crg_state_order],
+    for E, count, state in crg_list_ms:
+        if tuple(state) not in crg_all_count:
+            # initial k,v:
+            # k = tuple(crgms state); v = [count, [energy], [unique_crg_state_order]]
+            crg_all_count[tuple(state)] = [
+                count,
+                [E],
+                unique_crg_state_order,
             ]
             unique_crg_state_order += 1
         else:
-            crg_all_count[(tuple(array[2]))][0] += array[1]
+            # same state: increment the total count of ms
+            crg_all_count[tuple(state)][0] += count
 
             # get the maximum and minimum energy
-            min_energy = min(min(crg_all_count[(tuple(array[2]))][1]), array[0])
-            max_energy = max(max(crg_all_count[(tuple(array[2]))][1]), array[0])
+            min_energy = min(min(crg_all_count[tuple(state)][1]), E)
+            max_energy = max(max(crg_all_count[tuple(state)][1]), E)
 
-            # update the energy list with the minimum and maximum energy
-            crg_all_count[(tuple(array[2]))][1].clear()
-            crg_all_count[(tuple(array[2]))][1].append(min_energy)
-            crg_all_count[(tuple(array[2]))][1].append(max_energy)
+            # rest the energy list with the min and max energy so far:
+            crg_all_count[tuple(state)][1].clear()
+            crg_all_count[tuple(state)][1].append(min_energy)
+            crg_all_count[tuple(state)][1].append(max_energy)
 
-    # make a list of count, unique charge microstate, energy difference and order.
+    # make a list of crgms counts, unique charge microstate, order and E difference.
     all_crg_ms_unique = []
     all_count = []
     energy_diff_all = []
     unique_crg_state_order = []
-    for u, v in crg_all_count.items():
-        all_crg_ms_unique.append(list(u))
-        all_count.append(v[0])
-        unique_crg_state_order.append(v[2][0])
-        if len(v[1]) == 2:
-            energy_diff_all.append(round(v[1][1] - v[1][0], 6))
-        elif len(v[1]) == 1:
-            energy_diff_all.append(0.0)
+
+    for k in crg_all_count:
+        all_crg_ms_unique.append(list(k))
+
+        all_count.append(crg_all_count[k][0])
+        unique_crg_state_order.append(crg_all_count[k][2])
+        # E list: holds single value for unique crg state, or [min, max]
+        E = crg_all_count[k][1]
+        if len(E) == 2:
+            energy_diff_all.append(round(E[1] - E[0], 3))
         else:
-            sys.exit("Error while creating unique charge state: len(v[1]) is neither 1 or 2.")
+            energy_diff_all.append(0.0)
 
     logger.info(f"Number of unique charge ms: {len(all_crg_ms_unique):,}")
 
     return all_crg_ms_unique, all_count, unique_crg_state_order, energy_diff_all
-
-
-# aliased fn:
-findUniqueCrgmsCountOrder = find_uniq_crgms_count_order
 
 
 def combine_all_free_fixed_residues(free_res_crg_df: pd.DataFrame, fixed_res_crg_df: pd.DataFrame) -> pd.DataFrame:
@@ -870,28 +876,30 @@ def concat_crgms_dfs(
     return crg_count_res
 
 
-# aliased fn:
-ConcaCrgMsPandas = concat_crgms_dfs
-
-
-def filter_weightedcorr(df: pd.DataFrame, cutoff: float = 0.0) -> pd.DataFrame:
-    """Filter the weighted correlation of df by cutoff.
-    Uses WeightedCorr class.
+def add_fixed_res_crg(main_df: pd.DataFrame, fixed_df: pd.DataFrame) -> pd.DataFrame:
+    """Return a df which is main_df augmented with data from fixed_df;
+    The totals columns order is preserved & the index ("Order") is sorted.
     """
-    wc_df = WeightedCorr(df=df, wcol="Count")(method="pearson")
-    for i in wc_df.columns:
-        if list(abs(wc_df[i]) >= cutoff).count(True) == 1:
-            wc_df.drop(i, inplace=True)
-            wc_df.drop(i, axis=1, inplace=True)
+    out = main_df.copy()
+    N = out.shape[0]
+    tot_cols = out.columns[-3:].tolist()
 
-    return wc_df
+    new_df = pd.DataFrame({v[0]: [v[1]] * N for v in fixed_df.values})
+    for c in new_df.columns:
+        out[c] = new_df[c].values
+    out.sort_index(inplace=True)
+    res_cols = out.columns.tolist()
+    for tc in tot_cols:
+        res_cols.remove(tc)
+
+    return out[res_cols + tot_cols]
 
 
 def changing_residues_df(df: pd.DataFrame) -> pd.DataFrame:
     """Return transposed df minus unchanging residues as per stdev."""
 
     # exclude Occupancy & Sum_crg_protein columns and transpose:
-    new_df = df.iloc[:,:-2].T
+    new_df = df.iloc[:, :-2].T
     sorted_cols = sorted(list(new_df.columns))
     new_df = new_df[sorted_cols]
     new_df["std"] = new_df.std(axis=1).round(3)
@@ -901,77 +909,13 @@ def changing_residues_df(df: pd.DataFrame) -> pd.DataFrame:
     logger.info(f"Number of residues that change protonation state: {len(change_df.columns)-1}")
 
     return change_df
-    
 
 
 # >>> plotting functions ....................................
-def jointplot(
-    charge_ms_files: list,
-    background_charge: float,
-    fig_title: str,
-    out_dir: str,
-    save_name: str,
-    show: bool = False,
-):
-    """Output a joint plot with histogram."""
-    # Compute charge state population including background charge
-    x_av = [sum(x) + background_charge for x in charge_ms_files[0]]
-
-    # Avoid log(0) by replacing zeros with NaN (or a small positive value)
-    y_av = [math.log10(x) if x > 0 else float("nan") for x in charge_ms_files[1]]
-
-    # Initialize the JointGrid
-    g1 = sns.JointGrid(marginal_ticks=True, height=6)
-
-    # Scatter plot with bubble sizes based on energy differences
-    ax = sns.scatterplot(
-        x=x_av,
-        y=y_av,
-        size=charge_ms_files[3],
-        sizes=(10, 500),
-        ax=g1.ax_joint,
-    )
-
-    # Set x-axis ticks based on the range of x_av
-    ax.set_xticks(range(int(min(x_av)), int(max(x_av)) + 1))
-
-    # Labels
-    ax.set_xlabel("Charge", fontsize=15)
-    ax.set_ylabel(r"log$_{10}$(Count)", fontsize=16)
-
-    # Adjust legend position
-    ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.0)
-
-    # Histogram on the marginal x-axis
-    ax2 = sns.histplot(x=x_av, linewidth=2, discrete=True, ax=g1.ax_marg_x)
-    ax2.set_ylabel(None)
-
-    # Remove y-axis marginal plot
-    g1.ax_marg_y.set_axis_off()
-
-    # Adjust layout and title
-    g1.fig.subplots_adjust(top=0.9)
-
-    if fig_title:
-        g1.fig.suptitle(fig_title, fontsize=16)
-
-    fig_fp = Path(out_dir).joinpath(save_name)
-    # Save the figure
-    g1.savefig(fig_fp, dpi=600, bbox_inches="tight")
-    logger.info(f"Figure saved: {fig_fp!s}")
-    if fig_fp.suffix != ".png":
-        fig_png = fig_fp.with_suffix(".png")
-        g1.savefig(fig_png, dpi=300, bbox_inches="tight")
-        logger.info(f"Figure saved: {fig_png}")
-    if show:
-        plt.show()
-
-    return
-
-
-def plots_unique_crg_histogram(
+def unique_crgms_histogram(
     charge_ms_info: tuple,
     background_charge: float,
+    fig_title: str,
     out_dir: Path,
     save_name: str,
     show: bool = False,
@@ -982,16 +926,19 @@ def plots_unique_crg_histogram(
     """
     x_av = [sum(x) + background_charge for x in charge_ms_info[0]]
     y_av = [math.log10(x) for x in charge_ms_info[1]]
-    energy_diff_all_fl = [float(x) for x in charge_ms_info[3]]
+    # E differences in 4th (last) file:
+    # energy_diff_all_fl = [float(x) for x in charge_ms_info[3]]
 
     g1 = sns.JointGrid(marginal_ticks=True, height=6)
     ax = sns.scatterplot(
         x=x_av,
         y=y_av,
-        hue=energy_diff_all_fl,
+        # hue=energy_diff_all_fl,
+        hue=charge_ms_info[3],
         palette="viridis",
-        size=energy_diff_all_fl,
+        size=charge_ms_info[1],  # energy_diff_all_fl,
         sizes=(10, 200),
+        legend="brief",
         ax=g1.ax_joint,
     )
 
@@ -1004,31 +951,37 @@ def plots_unique_crg_histogram(
     ax2.set_ylabel(None, fontsize=16)
     g1.ax_marg_y.set_axis_off()
     g1.fig.subplots_adjust(top=0.9)
-    g1.fig.suptitle("Charge microstate energy", fontsize=16)
+    if fig_title:
+        g1.fig.suptitle(fig_title, fontsize=16)
 
     fig_fp = out_dir.joinpath(save_name)
     g1.savefig(fig_fp, dpi=300, bbox_inches="tight")
-    logger.info(f"Plot of unique charge distribution saved as {fig_fp}")
+    logger.info(f"Figure saved: {fig_fp}")
     if fig_fp.suffix != ".png":
         fig_png = fig_fp.with_suffix(".png")
         g1.savefig(fig_png, dpi=300, bbox_inches="tight")
-        logger.info(f"Plot of unique charge distribution saved as {fig_png}")
+        logger.info(f"Figure saved: {fig_png}")
     if show:
         plt.show()
 
     return
 
 
-def plot_hist_by_ms_energy(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.pdf", show: bool = False):
+def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.pdf", show: bool = False):
+    """
+    Plot the histogram of microstates energy.
+    Args:
+      ms_by_enrg: List of microstates sorted by energy.
 
+    """
     energy_lst_count = np.asarray(
         [a for a, f in zip([x[0] for x in ms_by_enrg], [x[1] for x in ms_by_enrg]) for _ in range(f)]
     )
-
     skewness, mean, std = skewnorm.fit(energy_lst_count)
 
     fig = plt.figure(figsize=(10, 8))
     fs = 15  # fontsize
+
     graph_hist = plt.hist(energy_lst_count, bins=100, alpha=0.6)
     Y = graph_hist[0]
     y = skewnorm.pdf(energy_lst_count, skewness, mean, std)
@@ -1056,10 +1009,10 @@ def plot_hist_by_ms_energy(ms_by_enrg: list, out_dir: Path, save_name: str = "en
     return
 
 
-def corr_heat_map(df_corr: pd.DataFrame, out_dir: Path, save_name: str = "corr.pdf", show: bool = False):
+def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.pdf", show: bool = False):
     plt.figure(figsize=(25, 8))
 
-    cmap = ListedColormap(["darkred", "red", "orange", "lightgray", "skyblue", "blue", "darkblue"])
+    cmap = ListedColormap(["darkred", "red", "orange", "lightgrey", "skyblue", "blue", "darkblue"])
     norm = BoundaryNorm([-1.0, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 1.0], cmap.N)
     heatmap = sns.heatmap(
         df_corr,
@@ -1074,29 +1027,41 @@ def corr_heat_map(df_corr: pd.DataFrame, out_dir: Path, save_name: str = "corr.p
     )
     plt.ylabel(None)
     plt.xlabel(None)
-    plt.yticks(fontsize=15, rotation=0)
-    plt.xticks(fontsize=15, rotation=90)
+    plt.yticks(
+        fontsize=14,
+    )
+    plt.xticks(
+        fontsize=14,
+    )  # rotation=90)
     cbar = heatmap.collections[0].colorbar
-    cbar.ax.tick_params(labelsize=20)
+    cbar.ax.tick_params(labelsize=16)
 
-    fig_fp = out_dir.joinpath(save_name)
-    plt.savefig(fig_fp, dpi=300, bbox_inches="tight")
-    logger.info(f"Correlation heat map saved as {fig_fp}")
-    if fig_fp.suffix != ".png":
-        fig_png = fig_fp.with_suffix(".png")
-        plt.savefig(fig_png, dpi=300, bbox_inches="tight")
-        logger.info(f"Correlation heat map saved as: {fig_png}")
+    if save_name:
+        if out_dir is not None:
+            fig_fp = out_dir.joinpath(save_name)
+        else:
+            fig_fp = Path(save_name)
+
+        plt.savefig(fig_fp, dpi=300, bbox_inches="tight")
+        logger.info(f"Correlation heat map saved as {fig_fp}")
+        if fig_fp.suffix != ".png":
+            fig_png = fig_fp.with_suffix(".png")
+            plt.savefig(fig_png, dpi=300, bbox_inches="tight")
+            logger.info(f"Correlation heat map saved as: {fig_png}")
     if show:
         plt.show()
 
     return
+
+
 # <<< plotting functions - end ....................................
 
 
-def check_mcce_input_files(mcce_dir: Path, ph_pt: str) -> tuple:
+def get_mcce_input_files(mcce_dir: Path, ph_pt: str) -> tuple:
+    """Return the verified path to head3.lst and to the 'msout file'."""
     h3_fp = mcce_dir.joinpath("head3.lst")
     if not h3_fp.exists():
-        sys.exit(f"FileNotFoundError: head3.lst not found in {h3_fp.parent}.")
+        sys.exit(f"FileNotFoundError: {h3_fp!s}not found.")
 
     msout_fp = mcce_dir.joinpath("ms_out", f"pH{ph_pt}eH0ms.txt")
     if not msout_fp.exists():
@@ -1104,17 +1069,16 @@ def check_mcce_input_files(mcce_dir: Path, ph_pt: str) -> tuple:
         ph = int(ph_pt)
         msout_fp = mcce_dir.joinpath("ms_out", f"pH{ph}eH0ms.txt")
         if not msout_fp.exists():
-            sys.exit(f"FileNotFoundError: ms_out file {msout_fp} not found in {msout_fp.parent}.")
+            sys.exit(f"FileNotFoundError: {msout_fp!s} not found")
 
     return h3_fp, msout_fp
 
 
-def crg_msa_with_correlation(mcce_dir: Path, ph_pt: int = 7,
-                             res_of_interest: list = IONIZABLES,
-                             corr_cutoff: float = 0.0):
-    """Wrapper to process charge ms with correlation.
-    """
-    h3_fp, msout_fp = check_mcce_input_files(mcce_dir, ph_pt)
+def crg_msa_with_correlation(
+    mcce_dir: Path, ph_pt: int = 7, res_of_interest: list = IONIZABLES, corr_cutoff: float = 0.0
+):
+    """Wrapper to process charge ms with correlation."""
+    h3_fp, msout_fp = get_mcce_input_files(mcce_dir, ph_pt)
 
     conformers = read_conformers(h3_fp)
     logger.info(f"Number of conformers: {len(conformers):,}\n")
@@ -1124,7 +1088,7 @@ def crg_msa_with_correlation(mcce_dir: Path, ph_pt: int = 7,
 
     ms_orig_lst = [[ms.E, ms.count, ms.state] for ms in mc.sort_microstates()]
 
-    plot_hist_by_ms_energy(ms_orig_lst, mcce_dir)
+    ms_energy_histogram(ms_orig_lst, mcce_dir)
 
     ms_free_res_df = free_residues_df(mc.free_residues, conformers, colname="Residue")
 
@@ -1134,7 +1098,7 @@ def crg_msa_with_correlation(mcce_dir: Path, ph_pt: int = 7,
     crg_orig_lst = ms2crgms(ms_orig_lst, id_vs_charge)
 
     charge_ms_info = find_uniq_crgms_count_order(crg_orig_lst)
-    plots_unique_crg_histogram(charge_ms_info, background_charge, mcce_dir, "logcount_vs_all_en_crgms.pdf")
+    unique_crgms_histogram(charge_ms_info, background_charge, mcce_dir, "logcount_vs_all_en_crgms.pdf")
 
     free_res_crg_count_df = concat_crgms_dfs(
         charge_ms_info[0], charge_ms_info[1], charge_ms_info[2], ms_free_res_df, background_charge, res_of_interest
@@ -1148,10 +1112,10 @@ def crg_msa_with_correlation(mcce_dir: Path, ph_pt: int = 7,
 
     all_crg_count_std = changing_residues_df(free_res_crg_count_df)
     df_renamed = rename_order_residues(all_crg_count_std)
-    df_correlation = filter_weightedcorr(df_renamed, cutoff=corr_cutoff)
+    df_correlation = WeightedCorr(df_renamed, cutoff=corr_cutoff)(method="pearson")
 
     if df_correlation.shape[0] > 1:
-        corr_heat_map(df_correlation, mcce_dir)
+        corr_heatmap(df_correlation, mcce_dir)
     else:
         logger.info("Single point correlation: no map.")
 
@@ -1206,9 +1170,12 @@ def crgmsa_cli(argv=None):
 
 
 if __name__ == "__main__":
-    #crgmsa_cli(sys.argv[1:])
+    # crgmsa_cli(sys.argv[1:])
     # temp message:
-    sys.exit(("Cannot run main function until mechanism for naming "
-              "the output files & figure titles is in place.\n"
-              "Use 'run_ms_analysis.ipynb' instead.")
-             )
+    sys.exit(
+        (
+            "Cannot run main function until mechanism for naming "
+            "the output files & figure titles is in place.\n"
+            "Use 'run_ms_analysis.ipynb' instead."
+        )
+    )

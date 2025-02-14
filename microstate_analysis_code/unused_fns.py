@@ -6,7 +6,12 @@ Module: unused_fns.py
   Unused functions pulled out of ms_analysis_wc.py.
 """
 
+import matplotlib.pyplot as plt
+import math
 import numpy as np
+import pandas as pd
+from pathlib import Path
+import seaborn as sns
 from typing import List
 
 
@@ -193,7 +198,6 @@ def whatchanged_res(msgroup1: list, msgroup2: list, free_res: list) -> list:
     return bhd
 
 
-
 def ms_convert2occ(microstates: list) -> dict:
     """
     Given a list of microstates, convert to conformer occupancy
@@ -217,4 +221,68 @@ def ms_convert2occ(microstates: list) -> dict:
         occ[key] = occurence[key] / N_ms
 
     return occ
+
+
+def jointplot(
+    charge_ms_files: list,
+    background_charge: float,
+    fig_title: str,
+    out_dir: str,
+    save_name: str,
+    show: bool = False,
+):
+    """Output a joint plot with histogram."""
+    # Compute charge state population including background charge
+    x_av = [sum(x) + background_charge for x in charge_ms_files[0]]
+
+    # Avoid log(0) by replacing zeros with NaN (or a small positive value)
+    y_av = [math.log10(x) if x > 0 else float("nan") for x in charge_ms_files[1]]
+
+    # Initialize the JointGrid
+    g1 = sns.JointGrid(marginal_ticks=True, height=6)
+
+    # Scatter plot with bubble sizes based on energy differences
+    ax = sns.scatterplot(
+        x=x_av,
+        y=y_av,
+        size=charge_ms_files[3],
+        sizes=(10, 500),
+        ax=g1.ax_joint,
+    )
+
+    # Set x-axis ticks based on the range of x_av
+    ax.set_xticks(range(int(min(x_av)), int(max(x_av)) + 1))
+
+    # Labels
+    ax.set_xlabel("Charge", fontsize=15)
+    ax.set_ylabel(r"log$_{10}$(Count)", fontsize=16)
+
+    # Adjust legend position
+    ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.0)
+
+    # Histogram on the marginal x-axis
+    ax2 = sns.histplot(x=x_av, linewidth=2, discrete=True, ax=g1.ax_marg_x)
+    ax2.set_ylabel(None)
+
+    # Remove y-axis marginal plot
+    g1.ax_marg_y.set_axis_off()
+
+    # Adjust layout and title
+    g1.fig.subplots_adjust(top=0.9)
+
+    if fig_title:
+        g1.fig.suptitle(fig_title, fontsize=16)
+
+    fig_fp = Path(out_dir).joinpath(save_name)
+    # Save the figure
+    g1.savefig(fig_fp, dpi=300, bbox_inches="tight")
+    print(f"Figure saved: {fig_fp!s}")
+    if fig_fp.suffix != ".png":
+        fig_png = fig_fp.with_suffix(".png")
+        g1.savefig(fig_png, dpi=300, bbox_inches="tight")
+        print(f"Figure saved: {fig_png}")
+    if show:
+        plt.show()
+
+    return
 
