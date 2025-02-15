@@ -15,6 +15,7 @@ from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from collections import defaultdict
 import logging
 import math
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import numpy as np
@@ -454,6 +455,9 @@ class WeightedCorr:
             if wcol not in df.columns:
                 raise KeyError("wcol not found in column names of df")
 
+            if not df.shape[0] > 1:
+                sys.exit("Too few rows for correlation.")
+
             cols = df.columns.to_list()
             _ = cols.pop(cols.index("Count"))
             self.df = df.loc[:, cols]
@@ -530,7 +534,8 @@ class WeightedCorr:
             # Sort the correlation matrix by the sum of correlations
             corr_sums = df_out.sum()
             sorted_corr_matrix = df_out.loc[
-                corr_sums.sort_values(ascending=False).index, corr_sums.sort_values(ascending=False).index
+                corr_sums.sort_values(ascending=False).index,
+                corr_sums.sort_values(ascending=False).index
             ]
 
             return sorted_corr_matrix
@@ -703,8 +708,7 @@ def rename_order_residues(crgms_data: pd.DataFrame):
 
         resid = y[2:5]
         if resid == "PL9":
-            resout = "MQ8" + y[5:]
-            ub_q_list.append(resout)
+            ub_q_list.append(res3_to_res1.get(resid, resid) + y[5:])
             continue
 
         # resid won't be shortened if not in msa.res3_to_res1:
@@ -728,11 +732,27 @@ def rename_order_residues(crgms_data: pd.DataFrame):
     return file_out
 
 
-def choose_res_data(df: pd.DataFrame, choose_res: list):
-    """Group the df by the given list.
-    Note: df must have a 'Count' column."""
+def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataFrame) -> Union[pd.DataFrame, None]:
+    """Group the df by the given list without fixed residues.
+    Returns:
+     A pandas.DataFrame grouped by choose_res and sorted by 'Count', 
+     or None if all residues in choose_res happen to be fixed residues.
+    Note:
+     - df must have a 'Count' column.
+    """
     if not choose_res:
         raise TypeError("Error: empty list given for df.groupby 'by' argument.")
+
+    if fixed_resoi_df.shape[0]:
+        excluded = (fixed_resoi_df.where(fixed_resoi_df.Residue.isin(choose_res))
+                    .dropna()
+                    .Residue.tolist()
+                    )
+        for res in excluded:
+            choose_res.remove(res)
+        if not choose_res:
+            print("All residues in choose_res are fixed: no data to return.")
+            return None
 
     df_choose_res = df.groupby(choose_res).Count.sum().reset_index()
     df_res_sort = df_choose_res.sort_values(by="Count", ascending=False).reset_index(drop=True)
@@ -926,33 +946,31 @@ def unique_crgms_histogram(
     """
     x_av = [sum(x) + background_charge for x in charge_ms_info[0]]
     y_av = [math.log10(x) for x in charge_ms_info[1]]
-    # E differences in 4th (last) file:
-    # energy_diff_all_fl = [float(x) for x in charge_ms_info[3]]
 
     g1 = sns.JointGrid(marginal_ticks=True, height=6)
     ax = sns.scatterplot(
         x=x_av,
         y=y_av,
-        # hue=energy_diff_all_fl,
-        hue=charge_ms_info[3],
+        hue=charge_ms_info[3],  # E differences
         palette="viridis",
-        size=charge_ms_info[1],  # energy_diff_all_fl,
+        size=charge_ms_info[1],
         sizes=(10, 200),
         legend="brief",
         ax=g1.ax_joint,
     )
 
+    fs = 14
     ax.set_xticks(range(int(min(x_av)), int(max(x_av)) + 1))
-    ax.set_xlabel("Charge", fontsize=15)
-    ax.set_ylabel("log$_{10}$(Count)", fontsize=16)
+    ax.set_xlabel("Charge", fontsize=fs)
+    ax.set_ylabel("log$_{10}$(Count)", fontsize=fs)
     ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.0)
 
     ax2 = sns.histplot(x=x_av, linewidth=2, discrete=True, ax=g1.ax_marg_x)
-    ax2.set_ylabel(None, fontsize=16)
+    ax2.set_ylabel(None, fontsize=fs)
     g1.ax_marg_y.set_axis_off()
     g1.fig.subplots_adjust(top=0.9)
     if fig_title:
-        g1.fig.suptitle(fig_title, fontsize=16)
+        g1.fig.suptitle(fig_title, fontsize=14)
 
     fig_fp = out_dir.joinpath(save_name)
     g1.savefig(fig_fp, dpi=300, bbox_inches="tight")
@@ -967,7 +985,8 @@ def unique_crgms_histogram(
     return
 
 
-def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.pdf", show: bool = False):
+def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.pdf",
+                        show: bool = False, fig_size=(8,8)):
     """
     Plot the histogram of microstates energy.
     Args:
@@ -979,8 +998,8 @@ def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "entha
     )
     skewness, mean, std = skewnorm.fit(energy_lst_count)
 
-    fig = plt.figure(figsize=(10, 8))
-    fs = 15  # fontsize
+    fig = plt.figure(figsize=fig_size)
+    fs = 14  # fontsize
 
     graph_hist = plt.hist(energy_lst_count, bins=100, alpha=0.6)
     Y = graph_hist[0]
@@ -1009,14 +1028,50 @@ def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "entha
     return
 
 
-def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.pdf", show: bool = False):
-    plt.figure(figsize=(25, 8))
+HEATMAP_SIZE = (20, 8)
 
-    cmap = ListedColormap(["darkred", "red", "orange", "lightgrey", "skyblue", "blue", "darkblue"])
+def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.pdf",
+                 check_allzeros: bool = True, show: bool = False,
+                 fig_size: Tuple[float, float] = HEATMAP_SIZE):
+    """Produce a heatmap from a correlation matrix.
+    Args:
+     - df_corr (pd.DataFrame): Correlation matrix as a pandas.DataFrame,
+     - out_dir (Path, None): Output directory for saving the figure,
+     - save_name (str, "corr.pdf"): The name of the output file,
+     - check_allzeros (bool, True): Notify if all off-diagonal entries are all 0,
+     - show (bool, False): Whether to display the figure.
+     - figsize (float 2-tuple, (25,8)): figure size in inches, (width, height).
+     Note:
+      If check_allzeros is True & the check returns True, there is no plotting.)
+    """
+    if check_allzeros:
+        corr_array = df_corr.values
+        # Create a mask for off-diagonal elements
+        off_diag_mask = ~np.eye(corr_array.shape[0], dtype=bool)
+        # Check if all off-diagonal elements are zero
+        if np.all(corr_array[off_diag_mask] == 0):
+            logging.warning("All off-diagonal values are 0: not plotting.")
+            return
+
+    if df_corr.shape[0] > 14 and fig_size==HEATMAP_SIZE:
+        logger.warning(("With a matrix size > 14 x 14, the fig_size argument"
+                        f" should be > {HEATMAP_SIZE}."))
+    
+    fig, ax = plt.subplots(figsize=fig_size)
+
+    #cmap = ListedColormap(["darkred", "red", "orange", "lightgrey", "skyblue", "blue", "darkblue"])
+    n_resample = 8
+    top = mpl.colormaps["Reds_r"].resampled(n_resample)
+    bottom = mpl.colormaps["Blues"].resampled(n_resample)
+    newcolors = np.vstack((top(np.linspace(0, 1, n_resample)),
+                           bottom(np.linspace(0, 1, n_resample))))
+    cmap = ListedColormap(newcolors, name="RB")
     norm = BoundaryNorm([-1.0, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 1.0], cmap.N)
     heatmap = sns.heatmap(
         df_corr,
         cmap=cmap,
+        vmin = -1.,
+        vmax = 1.,
         norm=norm,
         square=True,
         linecolor="gray",
@@ -1024,17 +1079,18 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
         fmt=".2f",
         annot=True,
         annot_kws={"fontsize": 12},
+        ax=ax,
     )
     plt.ylabel(None)
     plt.xlabel(None)
     plt.yticks(
-        fontsize=14,
+        fontsize=12,
     )
     plt.xticks(
-        fontsize=14,
+        fontsize=12,
     )  # rotation=90)
     cbar = heatmap.collections[0].colorbar
-    cbar.ax.tick_params(labelsize=16)
+    cbar.ax.tick_params(labelsize=12)
 
     if save_name:
         if out_dir is not None:
