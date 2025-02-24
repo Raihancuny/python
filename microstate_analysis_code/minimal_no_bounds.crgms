@@ -1,0 +1,11 @@
+# Minimal Input file
+#   Purpose: To use all possible defaults
+
+# mcce_dir :: The directory of a MCCE run containing a ms_out subfolder :: Default: current directory.
+mcce_dir = 4lzt
+
+# correl_resids :: list of conformer ids (among residue_kinds) to test for correlation.
+correl_resids = [GLUA0035_, HISA0015_, ASPA0119_]
+
+# Historgrams:
+  # 1 charge_histogram without filtering is always included even without this section

@@ -1,43 +1,41 @@
 #!/usr/bin/env python
 
 """
-Module: ms_analysis_wc.py
+Module: cms_analysis_wc.py
 
   Stand-alone charge microstate analysis with correlation.
   Can be used without the mcce program & its codebase.
 
-EXAMPLES:
-  ms_crg_analysis.py        # uses current dir
-  ms_crg_analysis.py  4LZT  # uses ./4LZT dir
+COMMAND LINE CALL EXAMPLE. Parameter passing via a file:
+  python cms_analysis_wc.py params.crgms  
 """
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from collections import defaultdict
 import logging
 import math
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, BoundaryNorm
-import numpy as np
 import operator
-import pandas as pd
 from pathlib import Path
 import re
-import seaborn as sns
 import string
 import sys
-from scipy.stats import skewnorm, rankdata
-from typing import Tuple, Union
+from typing import List, Tuple, Union
 import warnings
 
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+plt.ioff()
+from matplotlib.colors import ListedColormap, BoundaryNorm
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy.stats import skewnorm, rankdata
 
-# log to screen
+
 logging.basicConfig(
     level=logging.INFO,
     format="[%(levelname)s]: %(funcName)s:\n\t%(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    # filename="crgmswc.log",
-    # encoding="utf-8",
 )
 logger = logging.getLogger(__name__)
 
@@ -71,10 +69,6 @@ res3_to_res1 = {
 }
 
 
-# For splitting a string with re. Remove punctuation and spaces:
-re_split_pattern = re.compile(r"[\s{}]+".format(re.escape(string.punctuation)))
-
-
 class Conformer:
     """Minimal Conformer class for use in microstate analysis.
     Attributes: iconf, confid, ires, resid, crg.
@@ -102,10 +96,10 @@ def read_conformers(head3_path: str = "head3.lst") -> list:
     """Load conformerrs from given head3.lst path;
     Uses ./head3.lst by default; returns empty list if file not found.
     """
-    conformers = []
     if not Path(head3_path).exists():
-        return conformers
+        return []
 
+    conformers = []
     with open(head3_path) as h3:
         lines = h3.readlines()[1:]
 
@@ -397,9 +391,9 @@ class MSout:
 
     def __str__(self):
         return (
-            f"Number of microstates: {self.N_ms:,}\nNumber of unique microstates: "
+            f"\nNumber of microstates: {self.N_ms:,}\nNumber of unique microstates: "
             f"{self.N_uniq:,}\nEnergies: lowest_E: {self.lowest_E:,.2f}; average_E: "
-            f"{self.average_E:,.2f}; highest_E: {self.highest_E:,.2f}"
+            f"{self.average_E:,.2f}; highest_E: {self.highest_E:,.2f}\n"
         )
 
 
@@ -429,9 +423,10 @@ class WeightedCorr:
           cutoff: if given, return values whose absolute values are greater.
         Usage:
           ```
-          # Define df, then get the weighted correlation; return non-zero values
-          # by default:
-          ```
+          # input as DataFrame and weight column name:
+          wcorr = WeightedCorr(df=input_df, wcol="Count", cutoff=0.01)(method='pearson')
+
+          # input as a DataFrame subset:
           wcorr = WeightedCorr(xyw=df[["xcol", "ycol", "wcol"]])(method='pearson')
           ```
         """
@@ -459,7 +454,7 @@ class WeightedCorr:
                 sys.exit("Too few rows for correlation.")
 
             cols = df.columns.to_list()
-            _ = cols.pop(cols.index("Count"))
+            _ = cols.pop(cols.index(wcol))
             self.df = df.loc[:, cols]
             self.w = pd.to_numeric(df.loc[:, wcol], errors="coerce")
 
@@ -481,7 +476,7 @@ class WeightedCorr:
             except RuntimeWarning:
                 wcov = 0
 
-        if abs(wcov) >= self.cutoff:
+        if abs(wcov) > self.cutoff:
             return wcov
         else:
             return 0
@@ -541,13 +536,17 @@ class WeightedCorr:
             return sorted_corr_matrix
 
 
-def split_spunct(text, upper=True) -> list:
+# For splitting a string with re. Remove punctuation and spaces:
+re_split_pattern = re.compile(r"[\s{}]+".format(re.escape(string.punctuation)))
+
+
+def split_spunct(text, upper=True, pattern: re.Pattern = re_split_pattern) -> list:
     """Split text on space and punctuation."""
     if not text:
         return []
     if upper:
         text = text.upper()
-    return re.split(re_split_pattern, text)
+    return re.split(pattern, text)
 
 
 def sort_resoi_list(resoi_list: list) -> list:
@@ -570,6 +569,127 @@ def sort_resoi_list(resoi_list: list) -> list:
             ioniz.pop(ioniz.index(res))
 
     return ioniz + sorted(new_res)
+
+
+def params_main(ph: float = 7) -> dict:
+    """Obtain cms_analysis main parameters dict with default values for given ph.
+    """
+    params_defaults = {"mcce_dir": ".",
+                        "all_res_crg_csv": f"all_res_crg_ph{ph}.csv",
+                        "main_csv": f"all_crg_count_res_ph{ph}.csv",
+                        "res_of_interest_data_csv": f"crg_count_res_of_interest_ph{ph}.csv",
+                        "msout_file": f"pH{ph}eH0ms.txt",
+                        "residue_kinds": IONIZABLES,
+                        "correl_resids": None,
+                        "corr_method": "pearson",
+                        "corr_cutoff": '0',
+                        "fig_show": "False",
+                        "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
+                        "energy_histogram.fig_size": "(8,8)",
+                        "corr_heatmap.save_name": f"corr_ph{ph}.png",
+                        "corr_heatmap.fig_size": "(20, 8)"
+                        }
+
+    return params_defaults
+
+
+def params_histograms(ph: float = 7) -> dict:
+    """Obtain cms_analysis histogram parameters dict with default values for given ph.
+    """
+    params_defaults = {"charge_histogram0":
+                        {"bounds": "(None, None)",
+                         "title": "Charge Microstates Energy",
+                         "save_name": f"crgms_logcount_vs_E_ph{ph}.png"
+                         },
+                       "charge_histogram1":
+                        {'bounds': "(Emin, Emin + 1.36)",
+                         "title": "ChargeMicrostates Energy within 1.36 kcal/mol of Lowest",
+                         "save_name": f"crgms_logcount_vs_lowestE_ph{ph}.png"
+                         },
+                       "charge_histogram2":
+                        {"bounds": "(Eaver - 0.68, Eaver + 0.68)",
+                         "title": "Charge Microstates Energy within 0.5 pH (0.68 kcal/mol) of Mean",
+                         "save_name": f"crgms_logcount_vs_averE_ph{ph}.png"
+                         },
+                       "charge_histogram3":
+                        {"bounds": "(Emax - 1.36, Emax)",
+                         "title": "Charge Microstates Energy within 1.36 kcal/mol of Highest",
+                         "save_name": f"crgms_logcount_vs_highestE_ph{ph}.png"
+                         }
+                        }
+    
+    return params_defaults
+
+
+def load_crgms_param(filepath:str) -> Tuple[dict, dict]:
+    fp = Path(filepath)
+    if not fp.exists():
+        return FileNotFoundError(fp)
+
+    # for splitting lists of residues: keep underscore
+    punct = string.punctuation.replace("_","")
+    split_pattern = re.compile(r"[\s{}]+".format(re.escape(punct)))
+    
+    # load parameters file into a dict:
+    crgms_dict = {}    
+    with open(fp) as fh:
+        for line in fh:
+            line = line.strip()
+            if not len(line):
+                continue
+            if line.startswith("#"):
+                continue
+            try:
+                key, rawval = line.split("=")
+            except ValueError:
+                raise ValueError("Malformed entry: single equal sign required.")
+
+            rawval = rawval.strip()
+            if rawval.startswith("("):
+                # check tuple:
+                if rawval.endswith(")"):
+                    val = rawval
+                else:
+                    raise ValueError("Malformed tuple: must be (x,y) on same line.")
+            elif rawval.startswith("["):
+                 # check list on same line:
+                 if rawval.endswith("]"):
+                     val = sort_resoi_list(split_spunct(rawval[1:-1].strip(), pattern=split_pattern))
+                 else:
+                    raise ValueError("Malformed list: must be on same line.")
+            else:
+                # all others: strings:
+                val = rawval
+            crgms_dict[key.strip()] = val
+
+    p, e = crgms_dict.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
+    ph = p.removeprefix("ph")
+    crgms_dict["ph"] = ph
+    crgms_dict["eh"] = e.removesuffix("ms")
+
+    charge_histograms = defaultdict(dict)
+    remove_keys = []
+    for k in crgms_dict:
+        if k.startswith("charge_histogram"):
+            v = crgms_dict[k]
+            k1, k2 = k.split(".")
+            charge_histograms[k1].update({k2:v})
+            remove_keys.append(k)
+            
+    for k in remove_keys:
+        crgms_dict.pop(k)
+
+    # Add default params:
+    main_params = params_main(ph=ph)
+    for k in main_params:
+        if crgms_dict.get(k) is None:
+            crgms_dict[k] = main_params[k]
+
+    # Add params for unbounded histogram if none were given:
+    if not charge_histograms:
+        charge_histograms["charge_histogram0"] = params_histograms(ph=ph)["charge_histogram0"]
+        
+    return crgms_dict, dict(charge_histograms)
 
 
 def ms_counts(microstates: Union[dict, list]) -> int:
@@ -635,7 +755,7 @@ def free_res2sumcrg_df(microstates: Union[dict, list], free_res: list, conformer
     return pd.DataFrame(charges_total.items(), columns=["Residue", "crg"])
 
 
-def free_residues_df(free_res: list, conformers: list, colname: str = "FreeRes") -> pd.DataFrame:
+def free_residues_to_df(free_res: list, conformers: list, colname: str = "FreeRes") -> pd.DataFrame:
     """Return the free residues' ids in a pandas DataFrame."""
     return pd.DataFrame([conformers[res[0]].resid for res in free_res], columns=[colname])
 
@@ -751,7 +871,7 @@ def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataF
         for res in excluded:
             choose_res.remove(res)
         if not choose_res:
-            print("All residues in choose_res are fixed: no data to return.")
+            logger.info("All residues in choose_res are fixed: no data to return.")
             return None
 
     df_choose_res = df.groupby(choose_res).Count.sum().reset_index()
@@ -959,33 +1079,32 @@ def unique_crgms_histogram(
         ax=g1.ax_joint,
     )
 
-    fs = 14
+    fs = 14  # font size for axes labels and title
     ax.set_xticks(range(int(min(x_av)), int(max(x_av)) + 1))
     ax.set_xlabel("Charge", fontsize=fs)
     ax.set_ylabel("log$_{10}$(Count)", fontsize=fs)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.0)
+    ax.legend(bbox_to_anchor=(1., 1.), loc=2, borderaxespad=0.0)
 
     ax2 = sns.histplot(x=x_av, linewidth=2, discrete=True, ax=g1.ax_marg_x)
     ax2.set_ylabel(None, fontsize=fs)
     g1.ax_marg_y.set_axis_off()
     g1.fig.subplots_adjust(top=0.9)
     if fig_title:
-        g1.fig.suptitle(fig_title, fontsize=14)
+        g1.fig.suptitle(fig_title, fontsize=fs)
 
     fig_fp = out_dir.joinpath(save_name)
     g1.savefig(fig_fp, dpi=300, bbox_inches="tight")
     logger.info(f"Figure saved: {fig_fp}")
-    if fig_fp.suffix != ".png":
-        fig_png = fig_fp.with_suffix(".png")
-        g1.savefig(fig_png, dpi=300, bbox_inches="tight")
-        logger.info(f"Figure saved: {fig_png}")
+
     if show:
         plt.show()
+    else:
+        plt.close()
 
     return
 
 
-def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.pdf",
+def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.png",
                         show: bool = False, fig_size=(8,8)):
     """
     Plot the histogram of microstates energy.
@@ -1018,19 +1137,18 @@ def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "entha
     fig_fp = out_dir.joinpath(save_name)
     fig.savefig(fig_fp, dpi=300, bbox_inches="tight")
     logger.info(f"Histogram figure saved as {fig_fp}")
-    if fig_fp.suffix != ".png":
-        fig_png = fig_fp.with_suffix(".png")
-        fig.savefig(fig_png, dpi=300, bbox_inches="tight")
-        logger.info(f"Histogram figure saved as {fig_png}")
+
     if show:
         plt.show()
+    else:
+        plt.close()
 
     return
 
 
 HEATMAP_SIZE = (20, 8)
 
-def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.pdf",
+def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.png",
                  check_allzeros: bool = True, show: bool = False,
                  fig_size: Tuple[float, float] = HEATMAP_SIZE):
     """Produce a heatmap from a correlation matrix.
@@ -1044,22 +1162,22 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
      Note:
       If check_allzeros is True & the check returns True, there is no plotting.)
     """
+    df_corr = df_corr.round(2)
     if check_allzeros:
         corr_array = df_corr.values
         # Create a mask for off-diagonal elements
         off_diag_mask = ~np.eye(corr_array.shape[0], dtype=bool)
         # Check if all off-diagonal elements are zero
         if np.all(corr_array[off_diag_mask] == 0):
-            logging.warning("All off-diagonal values are 0: not plotting.")
+            logging.warning("All off-diagonal correlation values are 0.00: not plotting.")
             return
 
     if df_corr.shape[0] > 14 and fig_size==HEATMAP_SIZE:
         logger.warning(("With a matrix size > 14 x 14, the fig_size argument"
                         f" should be > {HEATMAP_SIZE}."))
     
-    fig, ax = plt.subplots(figsize=fig_size)
+    fig = plt.figure(figsize=fig_size)
 
-    #cmap = ListedColormap(["darkred", "red", "orange", "lightgrey", "skyblue", "blue", "darkblue"])
     n_resample = 8
     top = mpl.colormaps["Reds_r"].resampled(n_resample)
     bottom = mpl.colormaps["Blues"].resampled(n_resample)
@@ -1067,6 +1185,7 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
                            bottom(np.linspace(0, 1, n_resample))))
     cmap = ListedColormap(newcolors, name="RB")
     norm = BoundaryNorm([-1.0, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 1.0], cmap.N)
+    fs = 12
     heatmap = sns.heatmap(
         df_corr,
         cmap=cmap,
@@ -1078,19 +1197,14 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
         linewidths=0.01,
         fmt=".2f",
         annot=True,
-        annot_kws={"fontsize": 12},
-        ax=ax,
+        annot_kws={"fontsize": fs},
     )
     plt.ylabel(None)
     plt.xlabel(None)
-    plt.yticks(
-        fontsize=12,
-    )
-    plt.xticks(
-        fontsize=12,
-    )  # rotation=90)
+    plt.yticks(fontsize=fs)
+    plt.xticks(fontsize=fs)  # rotation=90)
     cbar = heatmap.collections[0].colorbar
-    cbar.ax.tick_params(labelsize=12)
+    cbar.ax.tick_params(labelsize=fs)
 
     if save_name:
         if out_dir is not None:
@@ -1100,111 +1214,251 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
 
         plt.savefig(fig_fp, dpi=300, bbox_inches="tight")
         logger.info(f"Correlation heat map saved as {fig_fp}")
-        if fig_fp.suffix != ".png":
-            fig_png = fig_fp.with_suffix(".png")
-            plt.savefig(fig_png, dpi=300, bbox_inches="tight")
-            logger.info(f"Correlation heat map saved as: {fig_png}")
+
     if show:
         plt.show()
+    else:
+        plt.close()
 
     return
-
-
 # <<< plotting functions - end ....................................
 
 
-def get_mcce_input_files(mcce_dir: Path, ph_pt: str) -> tuple:
-    """Return the verified path to head3.lst and to the 'msout file'."""
+def dfs_to_excel(dfs: List[Tuple[pd.DataFrame, str]], filepath: Path, write_engine: str="xlsxwriter"):
+    """Save pandas.DataFrames in dfs to Excel using the name passed in each item
+    which must be a tuple: (df, df_name), where df_name is used as the sheet_name.
+    Note: 
+      Saving pandas.DataFrames to excel will fail if write_engine is not installed; feault is
+      xlsxwriter. See https://anaconda.org/conda-forge/xlsxwriter.
+    """
+    try:
+        # Create an ExcelWriter object
+        with pd.ExcelWriter(filepath, engine=write_engine) as writer:
+            for df, df_name in dfs:
+                if df_name is not None:
+                    df.to_excel(writer, sheet_name=df_name)
+        writer.save()
+        logger.info(f"Saved Excel file {str(filepath)}.")
+    except Exception as e:
+        if type(e).__name__ == "ModuleNotFoundError":
+            logger.error(f"The {write_engine} write engine must be installed;", e)
+        else:
+            logger.error(f"Error occurred while saving Excel file: {str(e)}")
+    return
+
+
+def get_mcce_input_files(mcce_dir: str, ph_pt: str, eh_pt:str = "0") -> tuple:
+    """Return the verified path to head3.lst and to the 'msout file'.
+    """
+    mcce_dir = Path(mcce_dir).resolve()
     h3_fp = mcce_dir.joinpath("head3.lst")
     if not h3_fp.exists():
-        sys.exit(f"FileNotFoundError: {h3_fp!s}not found.")
+        logger.error(f"FileNotFoundError: {str(h3_fp)} not found.")
+        sys.exit(1)
 
-    msout_fp = mcce_dir.joinpath("ms_out", f"pH{ph_pt}eH0ms.txt")
+    msout_fp = mcce_dir.joinpath("ms_out", f"pH{ph_pt}eH{eh_pt}ms.txt")
     if not msout_fp.exists():
-        # try again with int (argparse returns float despite int type?):
+        # try again with int:
         ph = int(ph_pt)
-        msout_fp = mcce_dir.joinpath("ms_out", f"pH{ph}eH0ms.txt")
+        eh = int(eh_pt)
+        msout_fp = mcce_dir.joinpath("ms_out", f"pH{ph}eH{eh}ms.txt")
         if not msout_fp.exists():
-            sys.exit(f"FileNotFoundError: {msout_fp!s} not found")
+            sys.exit(f"FileNotFoundError: {str(msout_fp)} not found")
 
     return h3_fp, msout_fp
 
 
-def crg_msa_with_correlation(
-    mcce_dir: Path, ph_pt: int = 7, res_of_interest: list = IONIZABLES, corr_cutoff: float = 0.0
-):
-    """Wrapper to process charge ms with correlation."""
-    h3_fp, msout_fp = get_mcce_input_files(mcce_dir, ph_pt)
+def crg_msa_with_correlation(args1: dict, args2: dict):
+    """Processing pipeline to obtain charge ms with correlation outputs.
+    Args:
+     - args1 (dict): general parameters.
+     - args2 (dict): charge_histograms parameters
+    """ 
+    logger.info("Start msa")  
+    mcce_dir = Path(args1.get("mcce_dir", ".")).resolve()
+    
+    output_dir = mcce_dir.joinpath(args1.get("output_dir", "crgms_corr"))
+    if not output_dir.exists():
+        output_dir.mkdir()
+ 
+    p, e = args1.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
+    ph = p.removeprefix("ph")
+    eh = e.removesuffix("ms")
+
+    h3_fp, msout_fp = get_mcce_input_files(mcce_dir, ph, eh)
+
+    logger.info(f"mcce_dir: {str(mcce_dir)}")
+    logger.info(f"output_dir: {str(output_dir)}")
+    logger.info(f"head3.lst: {str(h3_fp)}")
+    logger.info(f"msout_file: {str(msout_fp)}")
+
+    # check before further processing:
+    residue_kinds = args1.get("residue_kinds", IONIZABLES)
+    choose_res = args1.get("correl_resids")
+    if choose_res is None:
+        logger.warning("No resids given for correlation.")
+    else:
+        # remove inconsistent entries:
+        correl_resids = [res for res in choose_res if res[:3] in residue_kinds]
+        if not correl_resids:
+            logger.warning("The kinds of resids for correlation were not found in residue_kinds list.")
+            choose_res = None
+
+    # for all plots:
+    show_fig = eval(args1.get("fig_show", "False"))
+    logger.info(f"Show figures: {show_fig}")
 
     conformers = read_conformers(h3_fp)
     logger.info(f"Number of conformers: {len(conformers):,}\n")
-
     mc = MSout(msout_fp)
     logger.info(mc)
 
+    # fixed res info:
+    background_crg, all_fixed_res_crg_df, all_fixed_res_crg_dict = fixed_residues_info(mc.fixed_iconfs, conformers)
+    logger.info(f"Background charge: {background_crg}")
+    logger.info(f"Number of fixed residues: {len(all_fixed_res_crg_dict)}")
+
+    # Save the free_residues in a pandas.DataFrame, it will be one of the inputs to the function msa.ConcaCrgMsPandas:
+    free_residues_df = free_residues_to_df(mc.free_residues, conformers, colname="Residue")
+    logger.info(f"Number of free residues: {free_residues_df.shape[0]:,}")
+
+    # Get their net charges into a df for combining with fixed_res
+    free_res_crg_df = free_res2sumcrg_df(mc.microstates.values(), mc.free_residues, conformers)
+
+    # Combine free & fixed res with crg and save to csv:
+    all_res_crg_df = combine_all_free_fixed_residues(free_res_crg_df, all_fixed_res_crg_df)
+    all_res_crg_csv = args1.get("all_res_crg_csv", f"all_res_crg_ph{ph}.csv")
+    all_res_crg_df.to_csv(output_dir.joinpath(all_res_crg_csv), index_label="Residue")
+
+    # fixed res of interest info:
+    background_crg, fixed_resoi_crg_df, fixed_resoi_crg_dict = fixed_residues_info(mc.fixed_iconfs,
+                                                                                   conformers,
+                                                                                   res_of_interest=residue_kinds                                           )
+    n_fixed_resoi = fixed_resoi_crg_df.shape[0]
+    if n_fixed_resoi:
+        logger.info(f"Fixed res in residues of interest: {n_fixed_resoi}")
+        fixed_resoi_crg_df.to_csv(output_dir.joinpath(f"fixed_crg_resoi_ph{ph}.csv"), index=False)
+    else:
+        fixed_resoi_crg_df = None
+        logger.info("No fixed residues of interest.")
+
+    # sorted ms list
     ms_orig_lst = [[ms.E, ms.count, ms.state] for ms in mc.sort_microstates()]
 
-    ms_energy_histogram(ms_orig_lst, mcce_dir)
-
-    ms_free_res_df = free_residues_df(mc.free_residues, conformers, colname="Residue")
-
-    background_charge, fixed_res_crg_df = fixed_residues_info(mc.fixed_iconfs, conformers, res_of_interest)
+    # energies distribution plot:
+    save_name = args1.get("energy_histogram.save_name", f"enthalpy_dist_ph{ph}.png")
+    fig_size = eval(args1.get("energy_histogram.fig_size", "(8,8)"))
+    ms_energy_histogram(ms_orig_lst, output_dir, save_name, show=show_fig, fig_size=fig_size)
 
     id_vs_charge = iconf2crg(conformers)
     crg_orig_lst = ms2crgms(ms_orig_lst, id_vs_charge)
 
-    charge_ms_info = find_uniq_crgms_count_order(crg_orig_lst)
-    unique_crgms_histogram(charge_ms_info, background_charge, mcce_dir, "logcount_vs_all_en_crgms.pdf")
+    #xl_list = []  # for creating list of (df, dfname) if msa.dfs_to_excel is to be used.
 
-    free_res_crg_count_df = concat_crgms_dfs(
-        charge_ms_info[0], charge_ms_info[1], charge_ms_info[2], ms_free_res_df, background_charge, res_of_interest
-    )
+    # processing for histograms, inputs in args2 dict:
+    for hist_d in list(args2.values()):
+        title = hist_d.get("title", "Charge Microstates Energy")
+        bounds = hist_d.get("bounds")
+        if bounds is None or "None" in bounds:
+            ebounds = (None, None)
+            df2csv_name = args1.get("main_csv", f"all_crg_count_res_ph{ph}.csv")
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_E_ph{ph}.png")
+        elif "Emin" in bounds:
+            offset = float(bounds[:-1].split("+")[1].strip())
+            # use lowest E of the charge microstates:
+            ebounds = (crg_orig_lst[0][0], crg_orig_lst[0][0] + offset)
+            df2csv_name = f"low_crg_count_res_ph{ph}.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Emin_ph{ph}.png")
+        elif "Eaver" in bounds:
+            # use average E of the conformer microstates:
+            offset = float(bounds[:-1].split("+")[1].strip())
+            ebounds = (mc.average_E - offset, mc.average_E + offset)
+            df2csv_name = f"aver_crg_count_res_ph{ph}.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Eaver_ph{ph}.png")
+        elif "Emax" in bounds:
+            # use max E of the conformer microstates:
+            offset = float(bounds[1:].split("-")[1].split(",")[0].strip())
+            ebounds = (mc.highest_E - offset, mc.highest_E)
+            df2csv_name = f"high_crg_count_res_ph{ph}.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Emax_ph{ph}.png")
 
-    res_crg_csv = mcce_dir.joinpath("all_res_crg.csv")
-    combine_all_free_fixed_residues(fixed_res_crg_df, free_res_crg_count_df).to_csv(res_crg_csv)
+        # compute:
+        logger.info(f"Getting crgms data for energy bounds: {bounds}")
+        crgms_info = find_uniq_crgms_count_order(crg_orig_lst,
+                                                 begin_energy = ebounds[0],
+                                                 end_energy = ebounds[1])
+        crg_count_df = concat_crgms_dfs(crgms_info[0],
+                                            crgms_info[1],
+                                            crgms_info[2], 
+                                            free_residues_df,
+                                            background_crg,
+                                            res_of_interest=residue_kinds
+                                            )
+        # save all crgms dfs:
+        crg_count_df.to_csv(output_dir.joinpath(df2csv_name), header=True)
+        #xl_list.append((crg_count_df, out_df_name))
+        
+        if ebounds == (None, None):
+            # preserve df for latter use:
+            all_crg_count_res = crg_count_df.copy()
 
-    res_crg_count_csv = mcce_dir.joinpath("all_res_crg_count.csv")
-    free_res_crg_count_df.to_csv(res_crg_count_csv, header=True)
+        # create figure
+        unique_crgms_histogram(crgms_info,
+                               background_crg,
+                               title,
+                               output_dir,
+                               save_name=save_name,
+                               show=show_fig)
 
-    all_crg_count_std = changing_residues_df(free_res_crg_count_df)
-    df_renamed = rename_order_residues(all_crg_count_std)
-    df_correlation = WeightedCorr(df_renamed, cutoff=corr_cutoff)(method="pearson")
+    all_crg_df = add_fixed_res_crg(all_crg_count_res, fixed_resoi_crg_df)
+    crg_count_csv = output_dir.joinpath(f"all_crg_count_resoi_ph{ph}.csv")
+    all_crg_df.to_csv(crg_count_csv, header=True)
 
-    if df_correlation.shape[0] > 1:
-        corr_heatmap(df_correlation, mcce_dir)
+    if choose_res is not None:
+        logger.info("Computing correlation for chosen resids...")
+        df_choose_res_data = choose_res_data(all_crg_df, correl_resids, fixed_resoi_crg_df)
+        df_choose_res_data["Occupancy"] = round(df_choose_res_data["Count"]/sum(df_choose_res_data["Count"]), 2)
+        
+        res_of_interest_data_csv = args1.get("res_of_interest_data_csv", f"crg_count_res_of_interest_ph{7}.csv")
+        df_choose_res_data.to_csv(output_dir.joinpath(res_of_interest_data_csv), header=True)
+   
+        # Relabel residues with shorter names:
+        df_chosen_res_renamed = rename_order_residues(df_choose_res_data)
+    
+        corr_method = args1.get("corr_method", "pearson")
+        corr_cutoff = float(args1.get("corr_cutoff", 0))
+
+        df_correlation = WeightedCorr(df=df_chosen_res_renamed,
+                                      wcol="Count", cutoff=corr_cutoff)(method=corr_method)
+        if df_correlation is not None:
+            savename = args1.get("corr_heatmap.save_name", f"corr_heatmap_ph{ph}.png")
+            figsize = eval(args1.get("corr_heatmap.fig_size", "(20, 8)"))
+    
+            corr_heatmap(df_correlation,
+                         out_dir = output_dir, save_name = savename,
+                         show=show_fig, fig_size = figsize)
     else:
-        logger.info("Single point correlation: no map.")
-
-    logger.info("Charge microstate analysis with correlation over.")
-
+        logger.info("No chosen resids: no correlation.")
+        
     return
 
 
 def crgmsa_parser() -> ArgumentParser:
 
-    DESC = """ms_analysis_wc.py ::
+    DESC = """cms_analysis_wc.py ::
 Stand-alone charge microstate analysis with correlation.
 Can be used without the mcce program & its codebase.
+The only command line option is the parameters file.
 
-EXAMPLES:
-  ms_crg_analysis.py        # uses current dir
-  ms_crg_analysis.py  4LZT  # uses ./4LZT dir
+CALL EXAMPLE:
+  python cms_analysis_wc.py params.crgms  
 """
     p = ArgumentParser(
-        prog="ms_crg_analysis.py",
+        prog="cms analysis with correlation",
         description=DESC,
         formatter_class=RawDescriptionHelpFormatter,
     )
-    p.add_argument("run_dir", type=str, default=".", help="MCCE run dir; default: %(default)s.")
-    p.add_argument("-ph_pt", type=int, default=7, help="Titration point; default: %(default)s.")
-    p.add_argument(
-        "-res_of_interest",
-        nargs="+",  # 1 or more, but cli will ask for at least 2
-        type=str,
-        default=IONIZABLES,
-        help="List of residues of interest; default: ionizable residues.",
-    )
-    p.add_argument("-corr_cutoff", type=float, default=0.0, help="Correlation cutoff value; default: %(default)s.")
+    p.add_argument("params_file", type=str, help="The input parameters file.")
 
     return p
 
@@ -1214,24 +1468,16 @@ def crgmsa_cli(argv=None):
     parser = crgmsa_parser()
     args = parser.parse_args(argv)
 
-    args.run_dir = Path(args.run_dir).resolve()
+    params = Path(args.params_file)
+    logger.info(f"params_file: {str(params)}")
+    if not params.exists():
+        sys.exit("Parameters file not found.")
 
-    if len(args.res_of_interest) < 2:
-        logger.error("There must be at least 2 residues of interest for correlation.")
-        sys.exit(1)
-
-    crg_msa_with_correlation(
-        args.run_dir, ph_pt=args.ph_pt, res_of_interest=args.res_of_interest, corr_cutoff=args.corr_cutoff
-    )
+    # load the parameters into 2 dicts:
+    args_d, crg_histo_d = load_crgms_param(params)
+    # run the processing pipeline:
+    crg_msa_with_correlation(args_d, crg_histo_d)
 
 
 if __name__ == "__main__":
-    # crgmsa_cli(sys.argv[1:])
-    # temp message:
-    sys.exit(
-        (
-            "Cannot run main function until mechanism for naming "
-            "the output files & figure titles is in place.\n"
-            "Use 'run_ms_analysis.ipynb' instead."
-        )
-    )
+    crgmsa_cli(sys.argv[1:])
