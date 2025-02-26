@@ -29,6 +29,8 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
 from scipy.stats import skewnorm, rankdata
 
 
@@ -1150,6 +1152,7 @@ HEATMAP_SIZE = (20, 8)
 
 def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.png",
                  check_allzeros: bool = True, show: bool = False,
+                 lower_tri = False,
                  fig_size: Tuple[float, float] = HEATMAP_SIZE):
     """Produce a heatmap from a correlation matrix.
     Args:
@@ -1158,6 +1161,7 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
      - save_name (str, "corr.pdf"): The name of the output file,
      - check_allzeros (bool, True): Notify if all off-diagonal entries are all 0,
      - show (bool, False): Whether to display the figure.
+     - lower_tri (bool, False): Return only the lower triangular matrix,
      - figsize (float 2-tuple, (25,8)): figure size in inches, (width, height).
      Note:
       If check_allzeros is True & the check returns True, there is no plotting.)
@@ -1176,8 +1180,6 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
         logger.warning(("With a matrix size > 14 x 14, the fig_size argument"
                         f" should be > {HEATMAP_SIZE}."))
     
-    fig = plt.figure(figsize=fig_size)
-
     n_resample = 8
     top = mpl.colormaps["Reds_r"].resampled(n_resample)
     bottom = mpl.colormaps["Blues"].resampled(n_resample)
@@ -1185,26 +1187,34 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
                            bottom(np.linspace(0, 1, n_resample))))
     cmap = ListedColormap(newcolors, name="RB")
     norm = BoundaryNorm([-1.0, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 1.0], cmap.N)
-    fs = 12
-    heatmap = sns.heatmap(
+    
+    if lower_tri:
+        # mask to get lower triangular matrix w diagonal:
+        msk = np.triu(np.ones_like(df_corr), k=1)
+    else:
+        msk = None
+
+    fig = plt.figure(figsize=fig_size)
+
+    fs = 12  # font size
+    ax = sns.heatmap(
         df_corr,
+        mask=msk,
         cmap=cmap,
         vmin = -1.,
         vmax = 1.,
         norm=norm,
         square=True,
-        linecolor="gray",
+        linecolor="white",
         linewidths=0.01,
         fmt=".2f",
         annot=True,
-        annot_kws={"fontsize": fs},
+        annot_kws={"fontsize": 10},
     )
-    plt.ylabel(None)
-    plt.xlabel(None)
+    ax.set(xlabel="", ylabel="")
     plt.yticks(fontsize=fs)
     plt.xticks(fontsize=fs)  # rotation=90)
-    cbar = heatmap.collections[0].colorbar
-    cbar.ax.tick_params(labelsize=fs)
+    plt.tight_layout()
 
     if save_name:
         if out_dir is not None:
@@ -1222,6 +1232,30 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
 
     return
 # <<< plotting functions - end ....................................
+
+
+def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters:int=5):
+    """Return the clustered correlation matrix.
+    Args:
+      - corr_df (pd.DataFrame): correlation dataframe, i.e. df.corr();
+      - n_clusters (int, 5): Number of candidate clusters, minimum 3;
+    """
+    # Convert correlation matrix to distance matrix
+    dist_matrix = pdist(1 - np.abs(corr_df))
+
+    # Perform hierarchical clustering
+    linkage_matrix = linkage(dist_matrix, method="complete")  #"ward")
+
+    if n_clusters < 3:
+        n_clusters = 3
+
+    clusters = fcluster(linkage_matrix, n_clusters, criterion="maxclust")
+
+    # Get the order of columns based on clustering
+    ordered_cols = [corr_df.columns[i] for i in np.argsort(clusters)]
+    
+    # Return the reordered correlation matrix:
+    return corr_df.loc[ordered_cols, ordered_cols]
 
 
 def dfs_to_excel(dfs: List[Tuple[pd.DataFrame, str]], filepath: Path, write_engine: str="xlsxwriter"):
@@ -1429,14 +1463,17 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
         corr_cutoff = float(args1.get("corr_cutoff", 0))
 
         df_correlation = WeightedCorr(df=df_chosen_res_renamed,
-                                      wcol="Count", cutoff=corr_cutoff)(method=corr_method)
+                                      wcol="Count",
+                                      cutoff=corr_cutoff)(method=corr_method)
         if df_correlation is not None:
             savename = args1.get("corr_heatmap.save_name", f"corr_heatmap_ph{ph}.png")
             figsize = eval(args1.get("corr_heatmap.fig_size", "(20, 8)"))
-    
-            corr_heatmap(df_correlation,
-                         out_dir = output_dir, save_name = savename,
-                         show=show_fig, fig_size = figsize)
+            clustered_corr = cluster_corr_matrix(df_correlation)
+            corr_heatmap(clustered_corr,
+                         out_dir = output_dir,
+                         save_name = savename,
+                         show=show_fig,
+                         fig_size = figsize)
     else:
         logger.info("No chosen resids: no correlation.")
         
