@@ -24,6 +24,7 @@ import warnings
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+
 plt.ioff()
 from matplotlib.colors import ListedColormap, BoundaryNorm
 import numpy as np
@@ -528,14 +529,7 @@ class WeightedCorr:
                 msk = df_out == 0
                 df_out = df_out.loc[~msk.all(axis=1), ~msk.all(axis=0)]
 
-            # Sort the correlation matrix by the sum of correlations
-            corr_sums = df_out.sum()
-            sorted_corr_matrix = df_out.loc[
-                corr_sums.sort_values(ascending=False).index,
-                corr_sums.sort_values(ascending=False).index
-            ]
-
-            return sorted_corr_matrix
+            return df_out
 
 
 # For splitting a string with re. Remove punctuation and spaces:
@@ -574,66 +568,66 @@ def sort_resoi_list(resoi_list: list) -> list:
 
 
 def params_main(ph: float = 7) -> dict:
-    """Obtain cms_analysis main parameters dict with default values for given ph.
-    """
-    params_defaults = {"mcce_dir": ".",
-                        "all_res_crg_csv": f"all_res_crg_ph{ph}.csv",
-                        "main_csv": f"all_crg_count_res_ph{ph}.csv",
-                        "res_of_interest_data_csv": f"crg_count_res_of_interest_ph{ph}.csv",
-                        "msout_file": f"pH{ph}eH0ms.txt",
-                        "residue_kinds": IONIZABLES,
-                        "correl_resids": None,
-                        "corr_method": "pearson",
-                        "corr_cutoff": '0',
-                        "fig_show": "False",
-                        "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
-                        "energy_histogram.fig_size": "(8,8)",
-                        "corr_heatmap.save_name": f"corr_ph{ph}.png",
-                        "corr_heatmap.fig_size": "(20, 8)"
-                        }
+    """Obtain cms_analysis main parameters dict with default values for given ph."""
+    params_defaults = {
+        "mcce_dir": ".",
+        "all_res_crg_csv": f"all_res_crg_ph{ph}.csv",
+        "main_csv": f"all_crg_count_res_ph{ph}.csv",
+        "res_of_interest_data_csv": f"crg_count_res_of_interest_ph{ph}.csv",
+        "msout_file": f"pH{ph}eH0ms.txt",
+        "residue_kinds": IONIZABLES,
+        "correl_resids": None,
+        "corr_method": "pearson",
+        "corr_cutoff": "0",
+        "fig_show": "False",
+        "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
+        "energy_histogram.fig_size": "(8,8)",
+        "corr_heatmap.save_name": f"corr_ph{ph}.png",
+        "corr_heatmap.fig_size": "(20, 8)",
+    }
 
     return params_defaults
 
 
 def params_histograms(ph: float = 7) -> dict:
-    """Obtain cms_analysis histogram parameters dict with default values for given ph.
-    """
-    params_defaults = {"charge_histogram0":
-                        {"bounds": "(None, None)",
-                         "title": "Charge Microstates Energy",
-                         "save_name": f"crgms_logcount_vs_E_ph{ph}.png"
-                         },
-                       "charge_histogram1":
-                        {'bounds': "(Emin, Emin + 1.36)",
-                         "title": "ChargeMicrostates Energy within 1.36 kcal/mol of Lowest",
-                         "save_name": f"crgms_logcount_vs_lowestE_ph{ph}.png"
-                         },
-                       "charge_histogram2":
-                        {"bounds": "(Eaver - 0.68, Eaver + 0.68)",
-                         "title": "Charge Microstates Energy within 0.5 pH (0.68 kcal/mol) of Mean",
-                         "save_name": f"crgms_logcount_vs_averE_ph{ph}.png"
-                         },
-                       "charge_histogram3":
-                        {"bounds": "(Emax - 1.36, Emax)",
-                         "title": "Charge Microstates Energy within 1.36 kcal/mol of Highest",
-                         "save_name": f"crgms_logcount_vs_highestE_ph{ph}.png"
-                         }
-                        }
-    
+    """Obtain cms_analysis histogram parameters dict with default values for given ph."""
+    params_defaults = {
+        "charge_histogram0": {
+            "bounds": "(None, None)",
+            "title": "Charge Microstates Energy",
+            "save_name": f"crgms_logcount_vs_E_ph{ph}.png",
+        },
+        "charge_histogram1": {
+            "bounds": "(Emin, Emin + 1.36)",
+            "title": "ChargeMicrostates Energy within 1.36 kcal/mol of Lowest",
+            "save_name": f"crgms_logcount_vs_lowestE_ph{ph}.png",
+        },
+        "charge_histogram2": {
+            "bounds": "(Eaver - 0.68, Eaver + 0.68)",
+            "title": "Charge Microstates Energy within 0.5 pH (0.68 kcal/mol) of Mean",
+            "save_name": f"crgms_logcount_vs_averE_ph{ph}.png",
+        },
+        "charge_histogram3": {
+            "bounds": "(Emax - 1.36, Emax)",
+            "title": "Charge Microstates Energy within 1.36 kcal/mol of Highest",
+            "save_name": f"crgms_logcount_vs_highestE_ph{ph}.png",
+        },
+    }
+
     return params_defaults
 
 
-def load_crgms_param(filepath:str) -> Tuple[dict, dict]:
+def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
     fp = Path(filepath)
     if not fp.exists():
         return FileNotFoundError(fp)
 
     # for splitting lists of residues: keep underscore
-    punct = string.punctuation.replace("_","")
+    punct = string.punctuation.replace("_", "")
     split_pattern = re.compile(r"[\s{}]+".format(re.escape(punct)))
-    
+
     # load parameters file into a dict:
-    crgms_dict = {}    
+    crgms_dict = {}
     with open(fp) as fh:
         for line in fh:
             line = line.strip()
@@ -654,10 +648,10 @@ def load_crgms_param(filepath:str) -> Tuple[dict, dict]:
                 else:
                     raise ValueError("Malformed tuple: must be (x,y) on same line.")
             elif rawval.startswith("["):
-                 # check list on same line:
-                 if rawval.endswith("]"):
-                     val = sort_resoi_list(split_spunct(rawval[1:-1].strip(), pattern=split_pattern))
-                 else:
+                # check list on same line:
+                if rawval.endswith("]"):
+                    val = sort_resoi_list(split_spunct(rawval[1:-1].strip(), pattern=split_pattern))
+                else:
                     raise ValueError("Malformed list: must be on same line.")
             else:
                 # all others: strings:
@@ -675,9 +669,9 @@ def load_crgms_param(filepath:str) -> Tuple[dict, dict]:
         if k.startswith("charge_histogram"):
             v = crgms_dict[k]
             k1, k2 = k.split(".")
-            charge_histograms[k1].update({k2:v})
+            charge_histograms[k1].update({k2: v})
             remove_keys.append(k)
-            
+
     for k in remove_keys:
         crgms_dict.pop(k)
 
@@ -690,7 +684,7 @@ def load_crgms_param(filepath:str) -> Tuple[dict, dict]:
     # Add params for unbounded histogram if none were given:
     if not charge_histograms:
         charge_histograms["charge_histogram0"] = params_histograms(ph=ph)["charge_histogram0"]
-        
+
     return crgms_dict, dict(charge_histograms)
 
 
@@ -857,7 +851,7 @@ def rename_order_residues(crgms_data: pd.DataFrame):
 def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataFrame) -> Union[pd.DataFrame, None]:
     """Group the df by the given list without fixed residues.
     Returns:
-     A pandas.DataFrame grouped by choose_res and sorted by 'Count', 
+     A pandas.DataFrame grouped by choose_res and sorted by 'Count',
      or None if all residues in choose_res happen to be fixed residues.
     Note:
      - df must have a 'Count' column.
@@ -866,10 +860,7 @@ def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataF
         raise TypeError("Error: empty list given for df.groupby 'by' argument.")
 
     if fixed_resoi_df.shape[0]:
-        excluded = (fixed_resoi_df.where(fixed_resoi_df.Residue.isin(choose_res))
-                    .dropna()
-                    .Residue.tolist()
-                    )
+        excluded = fixed_resoi_df.where(fixed_resoi_df.Residue.isin(choose_res)).dropna().Residue.tolist()
         for res in excluded:
             choose_res.remove(res)
         if not choose_res:
@@ -1085,7 +1076,7 @@ def unique_crgms_histogram(
     ax.set_xticks(range(int(min(x_av)), int(max(x_av)) + 1))
     ax.set_xlabel("Charge", fontsize=fs)
     ax.set_ylabel("log$_{10}$(Count)", fontsize=fs)
-    ax.legend(bbox_to_anchor=(1., 1.), loc=2, borderaxespad=0.0)
+    ax.legend(bbox_to_anchor=(1.0, 1.0), loc=2, borderaxespad=0.0)
 
     ax2 = sns.histplot(x=x_av, linewidth=2, discrete=True, ax=g1.ax_marg_x)
     ax2.set_ylabel(None, fontsize=fs)
@@ -1106,8 +1097,9 @@ def unique_crgms_histogram(
     return
 
 
-def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.png",
-                        show: bool = False, fig_size=(8,8)):
+def ms_energy_histogram(
+    ms_by_enrg: list, out_dir: Path, save_name: str = "enthalpy_dist.png", show: bool = False, fig_size=(8, 8)
+):
     """
     Plot the histogram of microstates energy.
     Args:
@@ -1150,10 +1142,16 @@ def ms_energy_histogram(ms_by_enrg: list, out_dir: Path, save_name: str = "entha
 
 HEATMAP_SIZE = (20, 8)
 
-def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "corr.png",
-                 check_allzeros: bool = True, show: bool = False,
-                 lower_tri = False,
-                 fig_size: Tuple[float, float] = HEATMAP_SIZE):
+
+def corr_heatmap(
+    df_corr: pd.DataFrame,
+    out_dir: Path = None,
+    save_name: str = "corr.png",
+    check_allzeros: bool = True,
+    show: bool = False,
+    lower_tri=False,
+    fig_size: Tuple[float, float] = HEATMAP_SIZE,
+):
     """Produce a heatmap from a correlation matrix.
     Args:
      - df_corr (pd.DataFrame): Correlation matrix as a pandas.DataFrame,
@@ -1176,18 +1174,16 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
             logging.warning("All off-diagonal correlation values are 0.00: not plotting.")
             return
 
-    if df_corr.shape[0] > 14 and fig_size==HEATMAP_SIZE:
-        logger.warning(("With a matrix size > 14 x 14, the fig_size argument"
-                        f" should be > {HEATMAP_SIZE}."))
-    
+    if df_corr.shape[0] > 14 and fig_size == HEATMAP_SIZE:
+        logger.warning(("With a matrix size > 14 x 14, the fig_size argument" f" should be > {HEATMAP_SIZE}."))
+
     n_resample = 8
     top = mpl.colormaps["Reds_r"].resampled(n_resample)
     bottom = mpl.colormaps["Blues"].resampled(n_resample)
-    newcolors = np.vstack((top(np.linspace(0, 1, n_resample)),
-                           bottom(np.linspace(0, 1, n_resample))))
+    newcolors = np.vstack((top(np.linspace(0, 1, n_resample)), bottom(np.linspace(0, 1, n_resample))))
     cmap = ListedColormap(newcolors, name="RB")
     norm = BoundaryNorm([-1.0, -0.5, -0.3, -0.1, 0.1, 0.3, 0.5, 1.0], cmap.N)
-    
+
     if lower_tri:
         # mask to get lower triangular matrix w diagonal:
         msk = np.triu(np.ones_like(df_corr), k=1)
@@ -1201,8 +1197,8 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
         df_corr,
         mask=msk,
         cmap=cmap,
-        vmin = -1.,
-        vmax = 1.,
+        vmin=-1.0,
+        vmax=1.0,
         norm=norm,
         square=True,
         linecolor="white",
@@ -1231,10 +1227,12 @@ def corr_heatmap(df_corr: pd.DataFrame, out_dir: Path = None, save_name: str = "
         plt.close()
 
     return
+
+
 # <<< plotting functions - end ....................................
 
 
-def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters:int=5):
+def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters: int = 5):
     """Return the clustered correlation matrix.
     Args:
       - corr_df (pd.DataFrame): correlation dataframe, i.e. df.corr();
@@ -1244,7 +1242,7 @@ def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters:int=5):
     dist_matrix = pdist(1 - np.abs(corr_df))
 
     # Perform hierarchical clustering
-    linkage_matrix = linkage(dist_matrix, method="complete")  #"ward")
+    linkage_matrix = linkage(dist_matrix, method="complete")  # "ward")
 
     if n_clusters < 3:
         n_clusters = 3
@@ -1253,15 +1251,15 @@ def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters:int=5):
 
     # Get the order of columns based on clustering
     ordered_cols = [corr_df.columns[i] for i in np.argsort(clusters)]
-    
+
     # Return the reordered correlation matrix:
     return corr_df.loc[ordered_cols, ordered_cols]
 
 
-def dfs_to_excel(dfs: List[Tuple[pd.DataFrame, str]], filepath: Path, write_engine: str="xlsxwriter"):
+def dfs_to_excel(dfs: List[Tuple[pd.DataFrame, str]], filepath: Path, write_engine: str = "xlsxwriter"):
     """Save pandas.DataFrames in dfs to Excel using the name passed in each item
     which must be a tuple: (df, df_name), where df_name is used as the sheet_name.
-    Note: 
+    Note:
       Saving pandas.DataFrames to excel will fail if write_engine is not installed; feault is
       xlsxwriter. See https://anaconda.org/conda-forge/xlsxwriter.
     """
@@ -1281,9 +1279,8 @@ def dfs_to_excel(dfs: List[Tuple[pd.DataFrame, str]], filepath: Path, write_engi
     return
 
 
-def get_mcce_input_files(mcce_dir: str, ph_pt: str, eh_pt:str = "0") -> tuple:
-    """Return the verified path to head3.lst and to the 'msout file'.
-    """
+def get_mcce_input_files(mcce_dir: str, ph_pt: str, eh_pt: str = "0") -> tuple:
+    """Return the verified path to head3.lst and to the 'msout file'."""
     mcce_dir = Path(mcce_dir).resolve()
     h3_fp = mcce_dir.joinpath("head3.lst")
     if not h3_fp.exists():
@@ -1307,14 +1304,14 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     Args:
      - args1 (dict): general parameters.
      - args2 (dict): charge_histograms parameters
-    """ 
-    logger.info("Start msa")  
+    """
+    logger.info("Start msa")
     mcce_dir = Path(args1.get("mcce_dir", ".")).resolve()
-    
+
     output_dir = mcce_dir.joinpath(args1.get("output_dir", "crgms_corr"))
     if not output_dir.exists():
         output_dir.mkdir()
- 
+
     p, e = args1.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
     ph = p.removeprefix("ph")
     eh = e.removesuffix("ms")
@@ -1365,9 +1362,9 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     all_res_crg_df.to_csv(output_dir.joinpath(all_res_crg_csv), index_label="Residue")
 
     # fixed res of interest info:
-    background_crg, fixed_resoi_crg_df, fixed_resoi_crg_dict = fixed_residues_info(mc.fixed_iconfs,
-                                                                                   conformers,
-                                                                                   res_of_interest=residue_kinds                                           )
+    background_crg, fixed_resoi_crg_df, fixed_resoi_crg_dict = fixed_residues_info(
+        mc.fixed_iconfs, conformers, res_of_interest=residue_kinds
+    )
     n_fixed_resoi = fixed_resoi_crg_df.shape[0]
     if n_fixed_resoi:
         logger.info(f"Fixed res in residues of interest: {n_fixed_resoi}")
@@ -1387,7 +1384,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     id_vs_charge = iconf2crg(conformers)
     crg_orig_lst = ms2crgms(ms_orig_lst, id_vs_charge)
 
-    #xl_list = []  # for creating list of (df, dfname) if msa.dfs_to_excel is to be used.
+    # xl_list = []  # for creating list of (df, dfname) if msa.dfs_to_excel is to be used.
 
     # processing for histograms, inputs in args2 dict:
     for hist_d in list(args2.values()):
@@ -1418,31 +1415,20 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
         # compute:
         logger.info(f"Getting crgms data for energy bounds: {bounds}")
-        crgms_info = find_uniq_crgms_count_order(crg_orig_lst,
-                                                 begin_energy = ebounds[0],
-                                                 end_energy = ebounds[1])
-        crg_count_df = concat_crgms_dfs(crgms_info[0],
-                                            crgms_info[1],
-                                            crgms_info[2], 
-                                            free_residues_df,
-                                            background_crg,
-                                            res_of_interest=residue_kinds
-                                            )
+        crgms_info = find_uniq_crgms_count_order(crg_orig_lst, begin_energy=ebounds[0], end_energy=ebounds[1])
+        crg_count_df = concat_crgms_dfs(
+            crgms_info[0], crgms_info[1], crgms_info[2], free_residues_df, background_crg, res_of_interest=residue_kinds
+        )
         # save all crgms dfs:
         crg_count_df.to_csv(output_dir.joinpath(df2csv_name), header=True)
-        #xl_list.append((crg_count_df, out_df_name))
-        
+        # xl_list.append((crg_count_df, out_df_name))
+
         if ebounds == (None, None):
             # preserve df for latter use:
             all_crg_count_res = crg_count_df.copy()
 
         # create figure
-        unique_crgms_histogram(crgms_info,
-                               background_crg,
-                               title,
-                               output_dir,
-                               save_name=save_name,
-                               show=show_fig)
+        unique_crgms_histogram(crgms_info, background_crg, title, output_dir, save_name=save_name, show=show_fig)
 
     all_crg_df = add_fixed_res_crg(all_crg_count_res, fixed_resoi_crg_df)
     crg_count_csv = output_dir.joinpath(f"all_crg_count_resoi_ph{ph}.csv")
@@ -1451,32 +1437,26 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     if choose_res is not None:
         logger.info("Computing correlation for chosen resids...")
         df_choose_res_data = choose_res_data(all_crg_df, correl_resids, fixed_resoi_crg_df)
-        df_choose_res_data["Occupancy"] = round(df_choose_res_data["Count"]/sum(df_choose_res_data["Count"]), 2)
-        
+        df_choose_res_data["Occupancy"] = round(df_choose_res_data["Count"] / sum(df_choose_res_data["Count"]), 2)
+
         res_of_interest_data_csv = args1.get("res_of_interest_data_csv", f"crg_count_res_of_interest_ph{7}.csv")
         df_choose_res_data.to_csv(output_dir.joinpath(res_of_interest_data_csv), header=True)
-   
+
         # Relabel residues with shorter names:
         df_chosen_res_renamed = rename_order_residues(df_choose_res_data)
-    
+
         corr_method = args1.get("corr_method", "pearson")
         corr_cutoff = float(args1.get("corr_cutoff", 0))
 
-        df_correlation = WeightedCorr(df=df_chosen_res_renamed,
-                                      wcol="Count",
-                                      cutoff=corr_cutoff)(method=corr_method)
+        df_correlation = WeightedCorr(df=df_chosen_res_renamed, wcol="Count", cutoff=corr_cutoff)(method=corr_method)
         if df_correlation is not None:
             savename = args1.get("corr_heatmap.save_name", f"corr_heatmap_ph{ph}.png")
             figsize = eval(args1.get("corr_heatmap.fig_size", "(20, 8)"))
             clustered_corr = cluster_corr_matrix(df_correlation)
-            corr_heatmap(clustered_corr,
-                         out_dir = output_dir,
-                         save_name = savename,
-                         show=show_fig,
-                         fig_size = figsize)
+            corr_heatmap(clustered_corr, out_dir=output_dir, save_name=savename, show=show_fig, fig_size=figsize)
     else:
         logger.info("No chosen resids: no correlation.")
-        
+
     return
 
 
