@@ -5,6 +5,8 @@ Module: cms_analysis_wc.py
 
   Stand-alone charge microstate analysis with correlation.
   Can be used without the mcce program & its codebase.
+  Can be obtain from the codebase using wget
+  TBD: give MCCE4 repo path once finalized.
 
 COMMAND LINE CALL EXAMPLE. Parameter passing via a file:
   python cms_analysis_wc.py params.crgms  
@@ -12,6 +14,7 @@ COMMAND LINE CALL EXAMPLE. Parameter passing via a file:
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from collections import defaultdict
+from copy import deepcopy
 import logging
 import math
 import operator
@@ -46,11 +49,6 @@ logger = logging.getLogger(__name__)
 ph2Kcal = 1.364
 half_ph = ph2Kcal / 2
 
-
-EMPTY_CONFS_LIST = """Empty conformers list. It is likely that a local head3.lst file was not found.
-Try reloading using the correct path to head3.lst:
-  `conformers = ms_analysis_wc.read_conformers(your_head3_lst_path)`.
-"""
 
 IONIZABLES = ["ASP", "GLU", "ARG", "HIS", "LYS", "CYS", "TYR", "NTR", "CTR"]
 ACIDIC_RES = ["ASP", "GLU"]
@@ -554,7 +552,7 @@ def sort_resoi_list(resoi_list: list) -> list:
         return []
 
     userlst = [res.upper() for res in resoi_list]
-    ioniz = IONIZABLES.copy()
+    ioniz = deepcopy(IONIZABLES)
 
     ioniz_set = set(ioniz)
     sym_diff = ioniz_set.symmetric_difference(userlst)
@@ -568,8 +566,10 @@ def sort_resoi_list(resoi_list: list) -> list:
 
 
 def params_main(ph: float = 7) -> dict:
-    """Obtain cms_analysis main parameters dict with default values for given ph."""
+    """Obtain cms_analysis main parameters dict with default values for given ph.
+    """
     params_defaults = {
+        # Most values are strings to match the values in the dicts returned by `load_param_file`.
         "mcce_dir": ".",
         "all_res_crg_csv": f"all_res_crg_ph{ph}.csv",
         "main_csv": f"all_crg_count_res_ph{ph}.csv",
@@ -579,6 +579,7 @@ def params_main(ph: float = 7) -> dict:
         "correl_resids": None,
         "corr_method": "pearson",
         "corr_cutoff": "0",
+        "n_clusters" : "5",
         "fig_show": "False",
         "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
         "energy_histogram.fig_size": "(8,8)",
@@ -622,12 +623,15 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
     if not fp.exists():
         return FileNotFoundError(fp)
 
-    # for splitting lists of residues: keep underscore
+    # for splitting lists of residues for correlation: keep underscore
     punct = string.punctuation.replace("_", "")
     split_pattern = re.compile(r"[\s{}]+".format(re.escape(punct)))
 
     # load parameters file into a dict:
     crgms_dict = {}
+    multi_found = False
+    correl_lines = []
+
     with open(fp) as fh:
         for line in fh:
             line = line.strip()
@@ -636,7 +640,15 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
             if line.startswith("#"):
                 continue
             try:
-                key, rawval = line.split("=")
+                if not multi_found:
+                    key, rawval = line.split("=")
+                else:
+                    if rawval.strip().endswith("]"):
+                        crgms_dict["correl_resids"] = correl_lines
+                        multi_found = False
+                    else:
+                        correl_lines.append(split_spunct(rawval[1:-1].strip(), pattern=split_pattern))
+
             except ValueError:
                 raise ValueError("Malformed entry: single equal sign required.")
 
@@ -650,13 +662,24 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
             elif rawval.startswith("["):
                 # check list on same line:
                 if rawval.endswith("]"):
-                    val = sort_resoi_list(split_spunct(rawval[1:-1].strip(), pattern=split_pattern))
+                    if key == "residue_kinds":
+                        val = sort_resoi_list(split_spunct(rawval[1:-1].strip()))
+                    else:
+                        # correl_resids on same line
+                        val = split_spunct(rawval[1:-1].strip(), pattern=split_pattern)
                 else:
-                    raise ValueError("Malformed list: must be on same line.")
+                    if key == "residue_kinds":
+                       sys.exit("Malformed residue_kinds entry, ']' not found: list within square brackets must be on the same line.")
+                    else:
+                        # correl_resids
+                        multi_found = True
+                        continue
             else:
                 # all others: strings:
                 val = rawval
-            crgms_dict[key.strip()] = val
+
+            if not multi_found:
+                crgms_dict[key.strip()] = val
 
     p, e = crgms_dict.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
     ph = p.removeprefix("ph")
@@ -731,7 +754,7 @@ def free_res2sumcrg_df(microstates: Union[dict, list], free_res: list, conformer
       None if conformers list is empty.
     """
     if not conformers:
-        logger.error(EMPTY_CONFS_LIST)
+        logger.error("The conformers list is empty!")
         return None
 
     if isinstance(microstates, dict):
@@ -873,7 +896,9 @@ def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataF
     return df_res_sort
 
 
-def find_uniq_crgms_count_order(crg_list_ms: list, begin_energy: float = None, end_energy: float = None):
+def find_uniq_crgms_count_order(crg_list_ms: list,
+                                begin_energy: float = None,
+                                end_energy: float = None) -> Tuple[list, list, list, list]:
     """
     Args:
       crg_list_ms (list): List of charge microstate, assumed sorted.
@@ -881,7 +906,11 @@ def find_uniq_crgms_count_order(crg_list_ms: list, begin_energy: float = None, e
       end_energy (float, None): Upper energy bound.
 
     Returns:
-     A tuple of lists: all_crg_ms_unique, all_count, unique_crg_state_order, energy_diff_all
+      A 4-tuple of lists:
+        0: all_crg_ms_unique,
+        1: all_count,
+        2: unique_crg_state_order,
+        3: energy_diff_all (used in plot)
 
     Notes:
         1. To filter crg_list_ms based on energy, both energy bounds are needed.
@@ -1020,7 +1049,10 @@ def add_fixed_res_crg(main_df: pd.DataFrame, fixed_df: pd.DataFrame) -> pd.DataF
     new_df = pd.DataFrame({v[0]: [v[1]] * N for v in fixed_df.values})
     for c in new_df.columns:
         out[c] = new_df[c].values
-    out.sort_index(inplace=True)
+    try:
+        out.sort_values(by="Count", ascending=False, inplace=True)
+    except (IndexError, KeyError):
+        out.sort_index(inplace=True)
     res_cols = out.columns.tolist()
     for tc in tot_cols:
         res_cols.remove(tc)
@@ -1051,21 +1083,29 @@ def unique_crgms_histogram(
     fig_title: str,
     out_dir: Path,
     save_name: str,
+    add_hue: bool = False,
     show: bool = False,
 ):
     """
     Visualize which tautomer charge state is most populated.
     This includes the background charge.
+    To show the energy ranges in the plot hue parameter, set add_hue to True.
     """
     x_av = [sum(x) + background_charge for x in charge_ms_info[0]]
     y_av = [math.log10(x) for x in charge_ms_info[1]]
 
+    hue_data, palet = None, None
+    if add_hue:
+        hue_data = charge_ms_info[3]   # E differences
+        palet = "viridis"
+
+    palet
     g1 = sns.JointGrid(marginal_ticks=True, height=6)
     ax = sns.scatterplot(
         x=x_av,
         y=y_av,
-        hue=charge_ms_info[3],  # E differences
-        palette="viridis",
+        hue=hue_data, 
+        palette=palet,
         size=charge_ms_info[1],
         sizes=(10, 200),
         legend="brief",
@@ -1227,8 +1267,6 @@ def corr_heatmap(
         plt.close()
 
     return
-
-
 # <<< plotting functions - end ....................................
 
 
@@ -1299,6 +1337,39 @@ def get_mcce_input_files(mcce_dir: str, ph_pt: str, eh_pt: str = "0") -> tuple:
     return h3_fp, msout_fp
 
 
+def resid2iconf(conformers: list) -> dict:
+    """Return the mapping of conformer resid to its index.
+    """
+    return dict((c.resid, c.iconf) for c in conformers)
+
+
+def check_res_list(correl_lst: list, res_lst: list = None, confs_lst: list = None) -> list:
+    """Perform at most 2 checks on res_list depending on presense of the other
+    list arguments:
+     - Whether items in res_list are in other_list;
+     - Whether items in res_list have a corresponding iconf.
+    """
+    if res_lst is None and confs_lst is None:
+        logger.warning("Both 'res_lst' and 'confs_lst' arguments were None.")
+        return correl_lst
+    
+    if res_lst:
+        correl_lst = [res for res in correl_lst if res[:3] in res_lst]
+
+    if not confs_lst:
+        return correl_lst
+    
+    if confs_lst:
+        correl2 = deepcopy(correl_lst)
+        res2iconf = resid2iconf(confs_lst)
+        for cr in correl_lst:
+            if res2iconf.get(cr) is None:
+                 logger.warning(f"Removing {cr!r} from correl_lst: not in conformers.")
+                 correl2.remove(cr)
+
+        return correl2
+
+
 def crg_msa_with_correlation(args1: dict, args2: dict):
     """Processing pipeline to obtain charge ms with correlation outputs.
     Args:
@@ -1323,26 +1394,39 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     logger.info(f"head3.lst: {str(h3_fp)}")
     logger.info(f"msout_file: {str(msout_fp)}")
 
-    # check before further processing:
     residue_kinds = args1.get("residue_kinds", IONIZABLES)
+    # validate correl resid:
     choose_res = args1.get("correl_resids")
     if choose_res is None:
         logger.warning("No resids given for correlation.")
     else:
         # remove inconsistent entries:
-        correl_resids = [res for res in choose_res if res[:3] in residue_kinds]
+        correl_resids = check_res_list(choose_res, res_lst=residue_kinds)
         if not correl_resids:
             logger.warning("The kinds of resids for correlation were not found in residue_kinds list.")
             choose_res = None
-
-    # for all plots:
-    show_fig = eval(args1.get("fig_show", "False"))
-    logger.info(f"Show figures: {show_fig}")
+        elif len(correl_resids) < 2:
+            logger.warning("There are not enough 'correl_resids' left post-validation for correlation.")
+            choose_res = None
 
     conformers = read_conformers(h3_fp)
     logger.info(f"Number of conformers: {len(conformers):,}\n")
+    
+    if choose_res is not None:
+        # Check ids are in conformers
+        correl_resids = check_res_list(choose_res, confs_lst=conformers)
+        if not correl_resids:
+            logger.warning("None of the resids for correlation are in the conformers list.")
+            choose_res = None
+        elif len(correl_resids) < 2:
+            logger.warning("There are not enough 'correl_resids' left post-validation for correlation.")
+            choose_res = None
+
     mc = MSout(msout_fp)
     logger.info(mc)
+
+    # for all plots:
+    show_fig = eval(args1.get("fig_show", "False"))
 
     # fixed res info:
     background_crg, all_fixed_res_crg_df, all_fixed_res_crg_dict = fixed_residues_info(mc.fixed_iconfs, conformers)
@@ -1388,6 +1472,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
     # processing for histograms, inputs in args2 dict:
     for hist_d in list(args2.values()):
+        plot_ok = True  # preset
         title = hist_d.get("title", "Charge Microstates Energy")
         bounds = hist_d.get("bounds")
         if bounds is None or "None" in bounds:
@@ -1412,13 +1497,23 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
             ebounds = (mc.highest_E - offset, mc.highest_E)
             df2csv_name = f"high_crg_count_res_ph{ph}.csv"
             save_name = hist_d.get("save_name", f"crgms_logcount_v_Emax_ph{ph}.png")
+        else:  # free bounds
+            b, e = bounds[1:-1].strip().split(",")
+            ebounds = (float(b.strip()), float(e.strip()))
+            df2csv_name = f"range_crg_count_res_ph{ph}.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Erange{ph}.png")
 
         # compute:
         logger.info(f"Getting crgms data for energy bounds: {bounds}")
-        crgms_info = find_uniq_crgms_count_order(crg_orig_lst, begin_energy=ebounds[0], end_energy=ebounds[1])
-        crg_count_df = concat_crgms_dfs(
-            crgms_info[0], crgms_info[1], crgms_info[2], free_residues_df, background_crg, res_of_interest=residue_kinds
-        )
+        crgms_info = find_uniq_crgms_count_order(crg_orig_lst,
+                                                 begin_energy=ebounds[0], end_energy=ebounds[1])
+        plot_ok = len(crgms_info[0]) > 0
+        crg_count_df = concat_crgms_dfs(crgms_info[0], crgms_info[1], crgms_info[2],
+                                        free_residues_df,
+                                        background_crg,
+                                        res_of_interest=residue_kinds
+                                        )
+        
         # save all crgms dfs:
         crg_count_df.to_csv(output_dir.joinpath(df2csv_name), header=True)
         # xl_list.append((crg_count_df, out_df_name))
@@ -1428,7 +1523,8 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
             all_crg_count_res = crg_count_df.copy()
 
         # create figure
-        unique_crgms_histogram(crgms_info, background_crg, title, output_dir, save_name=save_name, show=show_fig)
+        if plot_ok:
+            unique_crgms_histogram(crgms_info, background_crg, title, output_dir, save_name=save_name, show=show_fig)
 
     all_crg_df = add_fixed_res_crg(all_crg_count_res, fixed_resoi_crg_df)
     crg_count_csv = output_dir.joinpath(f"all_crg_count_resoi_ph{ph}.csv")
@@ -1452,7 +1548,8 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
         if df_correlation is not None:
             savename = args1.get("corr_heatmap.save_name", f"corr_heatmap_ph{ph}.png")
             figsize = eval(args1.get("corr_heatmap.fig_size", "(20, 8)"))
-            clustered_corr = cluster_corr_matrix(df_correlation)
+            clst = int(args1.get("n_clusters", "5"))
+            clustered_corr = cluster_corr_matrix(df_correlation, n_clusters=clst)
             corr_heatmap(clustered_corr, out_dir=output_dir, save_name=savename, show=show_fig, fig_size=figsize)
     else:
         logger.info("No chosen resids: no correlation.")
@@ -1490,10 +1587,10 @@ def crgmsa_cli(argv=None):
     if not params.exists():
         sys.exit("Parameters file not found.")
 
-    # load the parameters into 2 dicts:
-    args_d, crg_histo_d = load_crgms_param(params)
+    # load the parameters from the input file into 2 dicts:
+    main_d, crg_histo_d = load_crgms_param(params)
     # run the processing pipeline:
-    crg_msa_with_correlation(args_d, crg_histo_d)
+    crg_msa_with_correlation(main_d, crg_histo_d)
 
 
 if __name__ == "__main__":

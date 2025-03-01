@@ -6,14 +6,17 @@
 #   Spaces around the equal sign are not required.
 #   Quotes around strings values, or items in a list or tuple are not required.
 
-# Data entry:
-#   * Values as list (single line), e.g. residue_kinds, correl_resids:
-#     Enter comma-separated values within square brackets ([]). All these assignments are valid:
+# Comments: Not on a data line.
+
+# Data entry format:
+#   * Values as lists (single line); residue_kinds and correl_resids.
+#     Example:
 #       residue_kinds = [ ASP, GLU, ARG, HIS, LYS, TYR, NTR, 'CTR']
-#       residue_kinds =['ASP','GLU',"ARG",'HIS', 'LYS', 'TYR', "NTR", "CTR"]
+#       correl_resids = [ GLUA0035_,  GLUA0055_, HISA0015_ ASPA0119_  ]  
+
 #   * Values as 2-tuple, e.g.: .fig_size, .bounds: comma separated values within parentheses: (20, 8), (20,8).
 #   * All identifiers for plots can have attributes given with '.<attribute>, e.g.: energy_histogram.fig_size = (8,8).
-#    Valid attributes: .save_name, .fig_size, .title (and .bounds for the 'charge_histogramN' identifier).
+#    - Valid attributes: .save_name, .fig_size, .title (and .bounds for the 'charge_histogramN' identifier).
 #
 # INPUT/OUTPUT PATHS SELECTION
 # ========================================================================================
@@ -47,13 +50,13 @@
   # residue_kinds :: 3-letter code of residues of interest for filtering the microstates collection.
   # Default: If the 'residue_kinds line' is absent, commented out, or its value is an empty list,
   #          all ionizable residues are used for filtering.
-  # Note: order or dupicates do not matter.
+  # Note: order or duplicates do not matter.
   #
   residue_kinds = [ASP, HEM, PL9, GLU, HIS, TYR, NTR, CTR]
 
   # correl_resids :: list of conformer ids (among residue_kinds) to test for correlation.
   #  Format: 3-letter resid + chain letter + 4 digit seqnum + _
-  correl_resids = [GLUA0035_, HISA0015_, ASPA0119_]
+  correl_resids = [ GLUA0035_  GLUA0055_, HISA0015_ ASPA0119_  ]  
 
 
 # CORRELATION PARAMETERS
@@ -61,6 +64,9 @@
   # corr_method: either pearson or spearman:
   corr_method = pearson
   corr_cutoff = 0
+
+  # Change the number of clusters to pass to `cluster_corr_matrix` from default 5:
+  #n_clusters = 9
 
 
 # FIGURES PARAMETERS & ATTRIBUTES
@@ -76,6 +82,7 @@
   corr_heatmap.save_name = corr_ph7.png
 
   # Titles:
+
   # Add a title attribute to the correlation heatmap if needed (default is no title):
   #corr_heatmap.title = Loaded
 
@@ -84,22 +91,28 @@
   corr_heatmap.fig_size = (20, 8)
 
   # Charge microstates histograms:
-  #   Multiple histograms can be created using the 'charge_histogramN' identifier, where N is an integer.
+  #   Multiple histograms can be created using the 'charge_histogram' identifier,
+  #   which can end with integers or characters for clarity.
   #   Examples for plots with bounds vz Emin, Eaver & Emax:
 
   # charge_histogram0: Always included, creates all_crg_count_res: no filtering, value = (None, None):
   charge_histogram0.bounds = (None, None)
-  charge_histogram0.title = Charge Microstates Energy
+  charge_histogram0.title = Protonation MS Energy
   charge_histogram0.save_name = crgms_logcount_vs_E_ph7.png
 
   charge_histogram1.bounds = (Emin, Emin + 1.36) 
-  charge_histogram1.title = ChargeMicrostates Energy within 1.36 kcal/mol of Lowest
+  charge_histogram1.title = Protonation MS Energy within 1.36 kcal/mol of Lowest
   charge_histogram1.save_name = crgms_logcount_vs_lowestE_ph7.png
 
   charge_histogram2.bounds = (Eaver - 0.68, Eaver + 0.68)
-  charge_histogram2.title = Charge Microstates Energy within 0.5 pH (0.68 kcal/mol) of Average
+  charge_histogram2.title = Protonation MS Energy within 0.5 pH (0.68 kcal/mol) of Average
   charge_histogram2.save_name = crgms_logcount_vs_averE_ph7.png
 
   charge_histogram3.bounds = (Emax - 1.36, Emax)
-  charge_histogram3.title = Charge Microstates Energy within 1.36 kcal/mol of Highest
+  charge_histogram3.title = Protonation MS Energy within 1.36 kcal/mol of Highest
   charge_histogram3.save_name = crgms_logcount_vs_highestE_ph7.png
+
+  # example with free bounds:
+  charge_histogramB.bounds = (-5, 5)
+  charge_histogramB.title = Protonation MS Energy in (-5, 5) kcal/mol range
+  charge_histogramB.save_name = crgms_logcount_vs_highestE_ph7.png
