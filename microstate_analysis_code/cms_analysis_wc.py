@@ -407,7 +407,7 @@ class WeightedCorr:
         w: pd.Series = None,
         df: pd.DataFrame = None,
         wcol: str = None,
-        cutoff: float = 0.0,
+        cutoff: float = 0.02,
     ):
         """Weighted Correlation class.
         To instantiate WeightedCorr, either supply:
@@ -578,7 +578,7 @@ def params_main(ph: float = 7) -> dict:
         "residue_kinds": IONIZABLES,
         "correl_resids": None,
         "corr_method": "pearson",
-        "corr_cutoff": "0",
+        "corr_cutoff": "0.02",
         "n_clusters" : "5",
         "fig_show": "False",
         "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
