@@ -83,7 +83,9 @@ class Conformer:
         self.crg = 0.0
 
     def __str__(self):
-        return f"iconf={self.iconf}, confid={self.confid}, " f"ires={self.ires}, resid={self.resid}, crg={self.crg}"
+        return (
+            f"iconf={self.iconf}, confid={self.confid}, " f"ires={self.ires}, resid={self.resid}, crg={self.crg}"
+        )
 
     def load_from_head3lst(self, line):
         fields = line.split()
@@ -395,6 +397,8 @@ class MSout:
             f"\nNumber of microstates: {self.N_ms:,}\nNumber of unique microstates: "
             f"{self.N_uniq:,}\nEnergies: lowest_E: {self.lowest_E:,.2f}; average_E: "
             f"{self.average_E:,.2f}; highest_E: {self.highest_E:,.2f}\n"
+            f"Free residues: {len(self.free_residues):,}\n"
+            f"Fixed residues: {len(self.fixed_iconfs):,}\n"
         )
 
 
@@ -473,7 +477,9 @@ class WeightedCorr:
         with warnings.catch_warnings():
             warnings.filterwarnings("error")
             try:
-                wcov = self._wcov(x, y, [mx, my]) / np.sqrt(self._wcov(x, x, [mx, mx]) * self._wcov(y, y, [my, my]))
+                wcov = self._wcov(x, y, [mx, my]) / np.sqrt(
+                    self._wcov(x, x, [mx, mx]) * self._wcov(y, y, [my, my])
+                )
             except RuntimeWarning:
                 wcov = 0
 
@@ -566,8 +572,7 @@ def sort_resoi_list(resoi_list: list) -> list:
 
 
 def params_main(ph: float = 7) -> dict:
-    """Obtain cms_analysis main parameters dict with default values for given ph.
-    """
+    """Obtain cms_analysis main parameters dict with default values for given ph."""
     params_defaults = {
         # Most values are strings to match the values in the dicts returned by `load_param_file`.
         "mcce_dir": ".",
@@ -579,7 +584,7 @@ def params_main(ph: float = 7) -> dict:
         "correl_resids": None,
         "corr_method": "pearson",
         "corr_cutoff": "0.02",
-        "n_clusters" : "5",
+        "n_clusters": "5",
         "fig_show": "False",
         "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
         "energy_histogram.fig_size": "(8,8)",
@@ -619,39 +624,33 @@ def params_histograms(ph: float = 7) -> dict:
 
 
 def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
+    """Load parameters file into two dicts; the second one is used for processing
+    the charge histograms calculations & plotting.
+    """
     fp = Path(filepath)
     if not fp.exists():
         return FileNotFoundError(fp)
 
-    # for splitting lists of residues for correlation: keep underscore
-    punct = string.punctuation.replace("_", "")
-    split_pattern = re.compile(r"[\s{}]+".format(re.escape(punct)))
-
-    # load parameters file into a dict:
     crgms_dict = {}
-    multi_found = False
     correl_lines = []
 
-    with open(fp) as fh:
-        for line in fh:
-            line = line.strip()
-            if not len(line):
-                continue
-            if line.startswith("#"):
-                continue
-            try:
-                if not multi_found:
-                    key, rawval = line.split("=")
-                else:
-                    if rawval.strip().endswith("]"):
-                        crgms_dict["correl_resids"] = correl_lines
-                        multi_found = False
-                    else:
-                        correl_lines.append(split_spunct(rawval[1:-1].strip(), pattern=split_pattern))
+    # for splitting lists of residues for correlation: keep underscore
+    punct = string.punctuation.replace("_", "")
+    correl_split_pattern = re.compile(r"[\s{}]+".format(re.escape(punct)))
 
+    with open(filepath) as f:
+        # data lines:
+        lines = [line.strip() for line in f.readlines() if line.strip() and not line.strip().startswith("#")]
+
+    multi_found = False
+    for line in lines:
+        if not multi_found:
+            try:
+                key, rawval = line.split("=")
             except ValueError:
                 raise ValueError("Malformed entry: single equal sign required.")
 
+            key = key.strip()
             rawval = rawval.strip()
             if rawval.startswith("("):
                 # check tuple:
@@ -666,20 +665,29 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
                         val = sort_resoi_list(split_spunct(rawval[1:-1].strip()))
                     else:
                         # correl_resids on same line
-                        val = split_spunct(rawval[1:-1].strip(), pattern=split_pattern)
+                        val = split_spunct(rawval[1:-1].strip(), pattern=correl_split_pattern)
                 else:
                     if key == "residue_kinds":
-                       sys.exit("Malformed residue_kinds entry, ']' not found: list within square brackets must be on the same line.")
-                    else:
-                        # correl_resids
+                        sys.exit(
+                            "Malformed residue_kinds entry, ']' not found: list within square brackets must be on the same line."
+                        )
+                    elif key == "correl_resids":
                         multi_found = True
                         continue
             else:
                 # all others: strings:
                 val = rawval
-
             if not multi_found:
-                crgms_dict[key.strip()] = val
+                crgms_dict[key] = val
+        else:
+            rawval = line.strip()
+            if not rawval.endswith("]"):
+                correl_lines.extend([v for v in split_spunct(rawval, pattern=correl_split_pattern) if v])
+                continue
+            elif rawval.endswith("]"):
+                multi_found = False
+                crgms_dict["correl_resids"] = correl_lines
+                continue
 
     p, e = crgms_dict.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
     ph = p.removeprefix("ph")
@@ -740,9 +748,9 @@ def iconf2ires(free_residues: list) -> dict:
     Note: Reverse mapping of MSout.free_residue.
     """
     d = {}
-    for i, fres in enumerate(free_residues):
-        for iconf in fres:
-            d[iconf] = i
+    for i_res in range(len(free_residues)):
+        for iconf in free_residues[i_res]:
+            d[iconf] = i_res
     return d
 
 
@@ -896,9 +904,9 @@ def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataF
     return df_res_sort
 
 
-def find_uniq_crgms_count_order(crg_list_ms: list,
-                                begin_energy: float = None,
-                                end_energy: float = None) -> Tuple[list, list, list, list]:
+def find_uniq_crgms_count_order(
+    crg_list_ms: list, begin_energy: float = None, end_energy: float = None
+) -> Tuple[list, list, list, list]:
     """
     Args:
       crg_list_ms (list): List of charge microstate, assumed sorted.
@@ -989,7 +997,9 @@ def combine_all_free_fixed_residues(free_res_crg_df: pd.DataFrame, fixed_res_crg
 
 
 # TODO: Deprecate?
-def combine_free_fixed_residues0(free_res_crg_count_df: pd.DataFrame, fixed_residue_df: pd.DataFrame) -> pd.DataFrame:
+def combine_free_fixed_residues0(
+    free_res_crg_count_df: pd.DataFrame, fixed_residue_df: pd.DataFrame
+) -> pd.DataFrame:
 
     df_fixed_res_crg = fixed_residue_df.T
     df_fixed_res_crg.columns = df_fixed_res_crg.iloc[0]
@@ -1096,7 +1106,7 @@ def unique_crgms_histogram(
 
     hue_data, palet = None, None
     if add_hue:
-        hue_data = charge_ms_info[3]   # E differences
+        hue_data = charge_ms_info[3]  # E differences
         palet = "viridis"
 
     palet
@@ -1104,7 +1114,7 @@ def unique_crgms_histogram(
     ax = sns.scatterplot(
         x=x_av,
         y=y_av,
-        hue=hue_data, 
+        hue=hue_data,
         palette=palet,
         size=charge_ms_info[1],
         sizes=(10, 200),
@@ -1267,6 +1277,8 @@ def corr_heatmap(
         plt.close()
 
     return
+
+
 # <<< plotting functions - end ....................................
 
 
@@ -1337,9 +1349,8 @@ def get_mcce_input_files(mcce_dir: str, ph_pt: str, eh_pt: str = "0") -> tuple:
     return h3_fp, msout_fp
 
 
-def resid2iconf(conformers: list) -> dict:
-    """Return the mapping of conformer resid to its index.
-    """
+def get_resid2iconf_dict(conformers: list) -> dict:
+    """Return the mapping of conformer resid to its index."""
     return dict((c.resid, c.iconf) for c in conformers)
 
 
@@ -1352,20 +1363,20 @@ def check_res_list(correl_lst: list, res_lst: list = None, confs_lst: list = Non
     if res_lst is None and confs_lst is None:
         logger.warning("Both 'res_lst' and 'confs_lst' arguments were None.")
         return correl_lst
-    
+
     if res_lst:
         correl_lst = [res for res in correl_lst if res[:3] in res_lst]
 
     if not confs_lst:
         return correl_lst
-    
+
     if confs_lst:
         correl2 = deepcopy(correl_lst)
-        res2iconf = resid2iconf(confs_lst)
+        res2iconf = get_resid2iconf_dict(confs_lst)
         for cr in correl_lst:
             if res2iconf.get(cr) is None:
-                 logger.warning(f"Removing {cr!r} from correl_lst: not in conformers.")
-                 correl2.remove(cr)
+                logger.warning(f"Removing {cr!r} from correl_lst: not in conformers.")
+                correl2.remove(cr)
 
         return correl2
 
@@ -1411,7 +1422,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
     conformers = read_conformers(h3_fp)
     logger.info(f"Number of conformers: {len(conformers):,}\n")
-    
+
     if choose_res is not None:
         # Check ids are in conformers
         correl_resids = check_res_list(choose_res, confs_lst=conformers)
@@ -1505,15 +1516,17 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
         # compute:
         logger.info(f"Getting crgms data for energy bounds: {bounds}")
-        crgms_info = find_uniq_crgms_count_order(crg_orig_lst,
-                                                 begin_energy=ebounds[0], end_energy=ebounds[1])
+        crgms_info = find_uniq_crgms_count_order(crg_orig_lst, begin_energy=ebounds[0], end_energy=ebounds[1])
         plot_ok = len(crgms_info[0]) > 0
-        crg_count_df = concat_crgms_dfs(crgms_info[0], crgms_info[1], crgms_info[2],
-                                        free_residues_df,
-                                        background_crg,
-                                        res_of_interest=residue_kinds
-                                        )
-        
+        crg_count_df = concat_crgms_dfs(
+            crgms_info[0],
+            crgms_info[1],
+            crgms_info[2],
+            free_residues_df,
+            background_crg,
+            res_of_interest=residue_kinds,
+        )
+
         # save all crgms dfs:
         crg_count_df.to_csv(output_dir.joinpath(df2csv_name), header=True)
         # xl_list.append((crg_count_df, out_df_name))
@@ -1524,7 +1537,9 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
         # create figure
         if plot_ok:
-            unique_crgms_histogram(crgms_info, background_crg, title, output_dir, save_name=save_name, show=show_fig)
+            unique_crgms_histogram(
+                crgms_info, background_crg, title, output_dir, save_name=save_name, show=show_fig
+            )
 
     all_crg_df = add_fixed_res_crg(all_crg_count_res, fixed_resoi_crg_df)
     crg_count_csv = output_dir.joinpath(f"all_crg_count_resoi_ph{ph}.csv")
@@ -1544,7 +1559,9 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
         corr_method = args1.get("corr_method", "pearson")
         corr_cutoff = float(args1.get("corr_cutoff", 0))
 
-        df_correlation = WeightedCorr(df=df_chosen_res_renamed, wcol="Count", cutoff=corr_cutoff)(method=corr_method)
+        df_correlation = WeightedCorr(df=df_chosen_res_renamed, wcol="Count", cutoff=corr_cutoff)(
+            method=corr_method
+        )
         if df_correlation is not None:
             savename = args1.get("corr_heatmap.save_name", f"corr_heatmap_ph{ph}.png")
             figsize = eval(args1.get("corr_heatmap.fig_size", "(20, 8)"))

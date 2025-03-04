@@ -56,7 +56,12 @@
 
   # correl_resids :: list of conformer ids (among residue_kinds) to test for correlation.
   #  Format: 3-letter resid + chain letter + 4 digit seqnum + _
-  correl_resids = [  GLUA0035_ GLUA0055_,  HISA0015_ ASPA0119_ ]  
+  correl_resids = [  
+    GLUA0035_,
+      GLUA0055_, 
+      HISA0015_ ,
+      ASPA0119_ ,
+       ]  
 
 
 # CORRELATION PARAMETERS
@@ -71,7 +76,6 @@
 
 # FIGURES PARAMETERS & ATTRIBUTES
 # ========================================================================================
-
 # Global flag to indicate whether to show each plot:
   fig_show = False
 
@@ -99,19 +103,7 @@
   charge_histogram0.bounds = (None, None)
   charge_histogram0.title = Protonation MS Energy
   charge_histogram0.save_name = crgms_logcount_vs_E_ph7.png
-
-  charge_histogram1.bounds = (Emin, Emin + 1.36) 
-  charge_histogram1.title = Protonation MS Energy within 1.36 kcal/mol of Lowest
-  charge_histogram1.save_name = crgms_logcount_vs_lowestE_ph7.png
-
-  charge_histogram2.bounds = (Eaver - 0.68, Eaver + 0.68)
-  charge_histogram2.title = Protonation MS Energy within 0.5 pH (0.68 kcal/mol) of Average
-  charge_histogram2.save_name = crgms_logcount_vs_averE_ph7.png
-
-  charge_histogram3.bounds = (Emax - 1.36, Emax)
-  charge_histogram3.title = Protonation MS Energy within 1.36 kcal/mol of Highest
-  charge_histogram3.save_name = crgms_logcount_vs_highestE_ph7.png
-
+  
   # example with free bounds:
   charge_histogramB.bounds = (-5, 5)
   charge_histogramB.title = Protonation MS Energy in (-5, 5) kcal/mol range
