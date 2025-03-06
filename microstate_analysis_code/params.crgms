@@ -26,6 +26,11 @@
   # output_dir :: The mcce_dir subdirectory for saving the analysis files :: Default: crgms_corr.
   #output_dir = crgms_corr
 
+  # To return multi-line string of resids ready to use as values of the 'correl_resids' identifier.
+  # Default is False. If True, the list will be output to screen and the program will exit.
+  # Valid values: false, true, False, True.
+  list_head3_ionizables = False
+
   # Files names:
   # free and fixed residues charges:
   all_res_crg_csv = all_res_crg_ph7.csv

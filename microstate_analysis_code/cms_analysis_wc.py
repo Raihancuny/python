@@ -538,6 +538,8 @@ class WeightedCorr:
 
 # For splitting a string with re. Remove punctuation and spaces:
 re_split_pattern = re.compile(r"[\s{}]+".format(re.escape(string.punctuation)))
+# for splitting lists of residues for correlation: keep underscore
+correl_split_pattern = re.compile(r"[\s{}]+".format(re.escape(string.punctuation.replace("_", ""))))
 
 
 def split_spunct(text, upper=True, pattern: re.Pattern = re_split_pattern) -> list:
@@ -576,6 +578,8 @@ def params_main(ph: float = 7) -> dict:
     params_defaults = {
         # Most values are strings to match the values in the dicts returned by `load_param_file`.
         "mcce_dir": ".",
+        "output_dir": "crgms_corr",
+        "list_head3_ionizables": "False",
         "all_res_crg_csv": f"all_res_crg_ph{ph}.csv",
         "main_csv": f"all_crg_count_res_ph{ph}.csv",
         "res_of_interest_data_csv": f"crg_count_res_of_interest_ph{ph}.csv",
@@ -623,6 +627,31 @@ def params_histograms(ph: float = 7) -> dict:
     return params_defaults
 
 
+def list_head3_ionizables(h3_fp: Path, as_string: bool=True) -> list:
+    """Return the list of ionizable resids from head3.lst.
+    May be used to choose 'correl_resids'.
+    """
+    h3_fp = Path(h3_fp)
+    if h3_fp.name != "head3.lst":
+        print(f"File name not 'head3.lst': {h3_fp!s}")
+        return []
+    if not h3_fp.exists():
+        print(f"Not found: {h3_fp!s}")
+        return []
+    
+    h3_ioniz_res = []
+    h3_df = pd.read_csv(h3_fp, sep="\s+")
+    h3_ioniz_res = list(dict((f"{res[:3]}{res[5:11]}", "") for res in h3_df.iConf if res[:3] in IONIZABLES).keys())
+    if not as_string:
+        return h3_ioniz_res
+    res_lst = "[\n"
+    for res in h3_ioniz_res:
+        res_lst += f"{res!r},\n"
+    res_lst += "]"
+    
+    return res_lst
+
+
 def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
     """Load parameters file into two dicts; the second one is used for processing
     the charge histograms calculations & plotting.
@@ -634,13 +663,12 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
     crgms_dict = {}
     correl_lines = []
 
-    # for splitting lists of residues for correlation: keep underscore
-    punct = string.punctuation.replace("_", "")
-    correl_split_pattern = re.compile(r"[\s{}]+".format(re.escape(punct)))
-
     with open(filepath) as f:
         # data lines:
-        lines = [line.strip() for line in f.readlines() if line.strip() and not line.strip().startswith("#")]
+        lines = [line.strip() for line in f.readlines()
+                 if line.strip()
+                 and not line.strip().startswith("#")
+                 ]
 
     multi_found = False
     for line in lines:
@@ -650,8 +678,7 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
             except ValueError:
                 raise ValueError("Malformed entry: single equal sign required.")
 
-            key = key.strip()
-            rawval = rawval.strip()
+            key, rawval = key.strip(), rawval.strip()
             if rawval.startswith("("):
                 # check tuple:
                 if rawval.endswith(")"):
@@ -662,15 +689,15 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
                 # check list on same line:
                 if rawval.endswith("]"):
                     if key == "residue_kinds":
-                        val = sort_resoi_list(split_spunct(rawval[1:-1].strip()))
+                        val = sort_resoi_list([v for v in split_spunct(rawval[1:-1].strip()) if v])
                     else:
                         # correl_resids on same line
-                        val = split_spunct(rawval[1:-1].strip(), pattern=correl_split_pattern)
+                        val = [v for v in split_spunct(rawval[1:-1].strip(), pattern=correl_split_pattern) if v]
                 else:
                     if key == "residue_kinds":
-                        sys.exit(
-                            "Malformed residue_kinds entry, ']' not found: list within square brackets must be on the same line."
-                        )
+                        sys.exit(("Malformed residue_kinds entry, ']' not found: "
+                                  "list within square brackets must be on the same line.")
+                                 )
                     elif key == "correl_resids":
                         multi_found = True
                         continue
@@ -684,10 +711,12 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
             if not rawval.endswith("]"):
                 correl_lines.extend([v for v in split_spunct(rawval, pattern=correl_split_pattern) if v])
                 continue
-            elif rawval.endswith("]"):
+            if rawval.endswith("]"):
                 multi_found = False
-                crgms_dict["correl_resids"] = correl_lines
                 continue
+
+    if correl_lines:
+        crgms_dict["correl_resids"] = correl_lines
 
     p, e = crgms_dict.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
     ph = p.removeprefix("ph")
@@ -1206,7 +1235,7 @@ def corr_heatmap(
     Args:
      - df_corr (pd.DataFrame): Correlation matrix as a pandas.DataFrame,
      - out_dir (Path, None): Output directory for saving the figure,
-     - save_name (str, "corr.pdf"): The name of the output file,
+     - save_name (str, "corr.png"): The name of the output file,
      - check_allzeros (bool, True): Notify if all off-diagonal entries are all 0,
      - show (bool, False): Whether to display the figure.
      - lower_tri (bool, False): Return only the lower triangular matrix,
@@ -1355,17 +1384,23 @@ def get_resid2iconf_dict(conformers: list) -> dict:
 
 
 def check_res_list(correl_lst: list, res_lst: list = None, confs_lst: list = None) -> list:
-    """Perform at most 2 checks on res_list depending on presense of the other
+    """Perform at most 2 checks on res_list depending on presence of the other
     list arguments:
      - Whether items in res_list are in other_list;
      - Whether items in res_list have a corresponding iconf.
     """
     if res_lst is None and confs_lst is None:
-        logger.warning("Both 'res_lst' and 'confs_lst' arguments were None.")
+        logger.warning("Both 'res_lst' and 'confs_lst' arguments cannot be None.")
         return correl_lst
 
     if res_lst:
-        correl_lst = [res for res in correl_lst if res[:3] in res_lst]
+        new = []
+        for res in correl_lst:
+            if res[:3] in res_lst:
+                new.append(res)
+            else:
+                logger.warning(f"Removing {res!r} from correl_lst: {res[:3]} not in residue_kinds.")
+        correl_lst = new
 
     if not confs_lst:
         return correl_lst
@@ -1406,31 +1441,21 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     logger.info(f"msout_file: {str(msout_fp)}")
 
     residue_kinds = args1.get("residue_kinds", IONIZABLES)
-    # validate correl resid:
     choose_res = args1.get("correl_resids")
-    if choose_res is None:
-        logger.warning("No resids given for correlation.")
-    else:
-        # remove inconsistent entries:
-        correl_resids = check_res_list(choose_res, res_lst=residue_kinds)
-        if not correl_resids:
-            logger.warning("The kinds of resids for correlation were not found in residue_kinds list.")
-            choose_res = None
-        elif len(correl_resids) < 2:
-            logger.warning("There are not enough 'correl_resids' left post-validation for correlation.")
-            choose_res = None
 
     conformers = read_conformers(h3_fp)
     logger.info(f"Number of conformers: {len(conformers):,}\n")
 
-    if choose_res is not None:
-        # Check ids are in conformers
-        correl_resids = check_res_list(choose_res, confs_lst=conformers)
+    if choose_res is None:
+        logger.warning("No resids given for correlation.")
+    else:
+        # Check if ids kind in residue_kind and in conformers:
+        correl_resids = check_res_list(choose_res, res_lst=residue_kinds, confs_lst=conformers)
         if not correl_resids:
-            logger.warning("None of the resids for correlation are in the conformers list.")
+            logger.warning("Empty 'correl_resids' post-validation for correlation.")
             choose_res = None
         elif len(correl_resids) < 2:
-            logger.warning("There are not enough 'correl_resids' left post-validation for correlation.")
+            logger.warning("Not enough 'correl_resids' left post-validation for correlation.")
             choose_res = None
 
     mc = MSout(msout_fp)
@@ -1582,7 +1607,14 @@ Can be used without the mcce program & its codebase.
 The only command line option is the parameters file.
 
 CALL EXAMPLE:
-  python cms_analysis_wc.py params.crgms  
+  python cms_analysis_wc.py params.crgms
+
+Note:
+  If you add this line:
+     list_head3_ionizables = true
+  in your parameter file, the program will list the resids in head3.lst
+  and exit; The list or a portion thereof can then be used as values to
+  the 'correl_resids' identifier.
 """
     p = ArgumentParser(
         prog="cms analysis with correlation",
@@ -1606,8 +1638,16 @@ def crgmsa_cli(argv=None):
 
     # load the parameters from the input file into 2 dicts:
     main_d, crg_histo_d = load_crgms_param(params)
+    list_ionizables = main_d.get("list_head3_ionizables")
+    if list_ionizables is not None:
+        if list_ionizables.capitalize() == "True":
+            logger.info("List of ionizable residues in head3.lst:")
+            print(list_head3_ionizables(main_d.get("mcce_dir", ".")+"/head3.lst"))
+            sys.exit()
+
     # run the processing pipeline:
     crg_msa_with_correlation(main_d, crg_histo_d)
+    return
 
 
 if __name__ == "__main__":

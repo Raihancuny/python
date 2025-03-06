@@ -26,6 +26,8 @@
   # output_dir :: The mcce_dir subdirectory for saving the analysis files :: Default: crgms_corr.
   #output_dir = crgms_corr
 
+  #list_head3_ionizables = True
+
   # Files names:
   # free and fixed residues charges:
   all_res_crg_csv = all_res_crg_ph7.csv
