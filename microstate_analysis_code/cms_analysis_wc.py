@@ -578,11 +578,12 @@ def params_main(ph: float = 7) -> dict:
     params_defaults = {
         # Most values are strings to match the values in the dicts returned by `load_param_file`.
         "mcce_dir": ".",
-        "output_dir": "crgms_corr",
+        "output_dir": f"crgms_corr_ph{ph}",
         "list_head3_ionizables": "False",
-        "all_res_crg_csv": f"all_res_crg_ph{ph}.csv",
-        "main_csv": f"all_crg_count_res_ph{ph}.csv",
-        "res_of_interest_data_csv": f"crg_count_res_of_interest_ph{ph}.csv",
+        #Do not output file 'all_crg_count_res_ph7.csv'
+        #"main_csv": "all_crg_count_res_ph7.csv",
+        "all_res_crg_csv": "all_res_crg_status.csv",
+        "res_of_interest_data_csv": "crg_count_res_of_interest.csv",
         "msout_file": f"pH{ph}eH0ms.txt",
         "residue_kinds": IONIZABLES,
         "correl_resids": None,
@@ -590,37 +591,37 @@ def params_main(ph: float = 7) -> dict:
         "corr_cutoff": "0.02",
         "n_clusters": "5",
         "fig_show": "False",
-        "energy_histogram.save_name": f"enthalpy_dist_ph{ph}.png",
+        "energy_histogram.save_name": f"enthalpy_dist.png",
         "energy_histogram.fig_size": "(8,8)",
-        "corr_heatmap.save_name": f"corr_ph{ph}.png",
+        "corr_heatmap.save_name": f"corr.png",
         "corr_heatmap.fig_size": "(20, 8)",
     }
 
     return params_defaults
 
 
-def params_histograms(ph: float = 7) -> dict:
+def params_histograms() -> dict:
     """Obtain cms_analysis histogram parameters dict with default values for given ph."""
     params_defaults = {
         "charge_histogram0": {
             "bounds": "(None, None)",
             "title": "Charge Microstates Energy",
-            "save_name": f"crgms_logcount_vs_E_ph{ph}.png",
+            "save_name": "crgms_logcount_vs_E.png",
         },
         "charge_histogram1": {
             "bounds": "(Emin, Emin + 1.36)",
             "title": "ChargeMicrostates Energy within 1.36 kcal/mol of Lowest",
-            "save_name": f"crgms_logcount_vs_lowestE_ph{ph}.png",
+            "save_name": "crgms_logcount_vs_lowestE.png",
         },
         "charge_histogram2": {
             "bounds": "(Eaver - 0.68, Eaver + 0.68)",
             "title": "Charge Microstates Energy within 0.5 pH (0.68 kcal/mol) of Mean",
-            "save_name": f"crgms_logcount_vs_averE_ph{ph}.png",
+            "save_name": "crgms_logcount_vs_averE.png",
         },
         "charge_histogram3": {
             "bounds": "(Emax - 1.36, Emax)",
             "title": "Charge Microstates Energy within 1.36 kcal/mol of Highest",
-            "save_name": f"crgms_logcount_vs_highestE_ph{ph}.png",
+            "save_name": "crgms_logcount_vs_highestE.png",
         },
     }
 
@@ -644,6 +645,7 @@ def list_head3_ionizables(h3_fp: Path, as_string: bool=True) -> list:
     h3_ioniz_res = list(dict((f"{res[:3]}{res[5:11]}", "") for res in h3_df.iConf if res[:3] in IONIZABLES).keys())
     if not as_string:
         return h3_ioniz_res
+
     res_lst = "[\n"
     for res in h3_ioniz_res:
         res_lst += f"{res!r},\n"
@@ -743,7 +745,7 @@ def load_crgms_param(filepath: str) -> Tuple[dict, dict]:
 
     # Add params for unbounded histogram if none were given:
     if not charge_histograms:
-        charge_histograms["charge_histogram0"] = params_histograms(ph=ph)["charge_histogram0"]
+        charge_histograms["charge_histogram0"] = params_histograms()["charge_histogram0"]
 
     return crgms_dict, dict(charge_histograms)
 
@@ -806,7 +808,7 @@ def free_res2sumcrg_df(microstates: Union[dict, list], free_res: list, conformer
 
     for x in charges_total:
         tot = charges_total[x]
-        charges_total[x] = round(tot / N_ms, 1)
+        charges_total[x] = round(tot / N_ms, 0)
 
     return pd.DataFrame(charges_total.items(), columns=["Residue", "crg"])
 
@@ -829,7 +831,7 @@ def fixed_residues_info(
     dd = defaultdict(float)
     for conf in conformers:
         if conf.iconf in fixed_iconfs:
-            dd[conf.resid] = conf.crg
+            dd[conf.resid] = int(conf.crg)
     fixed_backgrd_charge = sum(dd.values())
     if res_of_interest:
         dd = {k: dd[k] for k in dd if k[:3] in res_of_interest}
@@ -856,7 +858,13 @@ def ms2crgms(ll: list, dd: dict) -> list:
     return crg_lst
 
 
-def rename_order_residues(crgms_data: pd.DataFrame):
+def filter_fixed_from_choose_res(fixed_resoi_df: pd.DataFrame, choose_res: list) -> list:
+    fixed_res = fixed_resoi_df.Residue.tolist()
+    return [res for res in choose_res if res not in fixed_res]
+
+
+def rename_order_residues(crgms_data: pd.DataFrame, chosen_free_res: list):
+    """Rename resid in df columns if in chosen_free_res."""
     rename_dict = {}
     acid_list = []
     base_list = []
@@ -865,14 +873,16 @@ def rename_order_residues(crgms_data: pd.DataFrame):
     non_res_list = []
 
     # exclude Occupancy column expected as last column:
+    # NTRA0001_	GLUA0007_	GLUA0035_	ASPA0048_	ASPA0052_	TYRA0053_	Count	Occupancy
     for col in crgms_data.columns[:-1]:
-        residue_number = col[4:8]
+        if col in chosen_free_res:
+            residue_number = col[4:8]
 
-        if residue_number.isdigit():  # Check if the substring is numeric
-            # remove leading zeros
-            rename_dict[col] = col[3] + "_" + col[:3] + str(int(residue_number))
-        else:
-            rename_dict[col] = col[3] + "_" + col[:3] + residue_number
+            if residue_number.isdigit():  # Check if the substring is numeric
+                # remove leading zeros
+                rename_dict[col] = col[3] + "_" + col[:3] + str(int(residue_number))
+            else:
+                rename_dict[col] = col[3] + "_" + col[:3] + residue_number
 
     rename_dict["Count"] = "Count"
 
@@ -908,24 +918,15 @@ def rename_order_residues(crgms_data: pd.DataFrame):
     return file_out
 
 
-def choose_res_data(df: pd.DataFrame, choose_res: list, fixed_resoi_df: pd.DataFrame) -> Union[pd.DataFrame, None]:
-    """Group the df by the given list without fixed residues.
+def choose_res_data(df: pd.DataFrame, choose_res: list) -> pd.DataFrame:
+    """Group the df by the given list.
     Returns:
      A pandas.DataFrame grouped by choose_res and sorted by 'Count',
-     or None if all residues in choose_res happen to be fixed residues.
     Note:
      - df must have a 'Count' column.
     """
     if not choose_res:
         raise TypeError("Error: empty list given for df.groupby 'by' argument.")
-
-    if fixed_resoi_df.shape[0]:
-        excluded = fixed_resoi_df.where(fixed_resoi_df.Residue.isin(choose_res)).dropna().Residue.tolist()
-        for res in excluded:
-            choose_res.remove(res)
-        if not choose_res:
-            logger.info("All residues in choose_res are fixed: no data to return.")
-            return None
 
     df_choose_res = df.groupby(choose_res).Count.sum().reset_index()
     df_res_sort = df_choose_res.sort_values(by="Count", ascending=False).reset_index(drop=True)
@@ -1017,8 +1018,8 @@ def find_uniq_crgms_count_order(
 
 
 def combine_all_free_fixed_residues(free_res_crg_df: pd.DataFrame, fixed_res_crg_df: pd.DataFrame) -> pd.DataFrame:
-    free_res_crg_df["is_fixed"] = False
-    fixed_res_crg_df["is_fixed"] = True
+    free_res_crg_df["status"] = "free"
+    fixed_res_crg_df["status"] = "fixed"
     df = pd.concat([free_res_crg_df, fixed_res_crg_df])
     df.set_index("Residue", inplace=True)
 
@@ -1306,8 +1307,6 @@ def corr_heatmap(
         plt.close()
 
     return
-
-
 # <<< plotting functions - end ....................................
 
 
@@ -1333,29 +1332,6 @@ def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters: int = 5):
 
     # Return the reordered correlation matrix:
     return corr_df.loc[ordered_cols, ordered_cols]
-
-
-def dfs_to_excel(dfs: List[Tuple[pd.DataFrame, str]], filepath: Path, write_engine: str = "xlsxwriter"):
-    """Save pandas.DataFrames in dfs to Excel using the name passed in each item
-    which must be a tuple: (df, df_name), where df_name is used as the sheet_name.
-    Note:
-      Saving pandas.DataFrames to excel will fail if write_engine is not installed; feault is
-      xlsxwriter. See https://anaconda.org/conda-forge/xlsxwriter.
-    """
-    try:
-        # Create an ExcelWriter object
-        with pd.ExcelWriter(filepath, engine=write_engine) as writer:
-            for df, df_name in dfs:
-                if df_name is not None:
-                    df.to_excel(writer, sheet_name=df_name)
-        writer.save()
-        logger.info(f"Saved Excel file {str(filepath)}.")
-    except Exception as e:
-        if type(e).__name__ == "ModuleNotFoundError":
-            logger.error(f"The {write_engine} write engine must be installed;", e)
-        else:
-            logger.error(f"Error occurred while saving Excel file: {str(e)}")
-    return
 
 
 def get_mcce_input_files(mcce_dir: str, ph_pt: str, eh_pt: str = "0") -> tuple:
@@ -1425,13 +1401,14 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     logger.info("Start msa")
     mcce_dir = Path(args1.get("mcce_dir", ".")).resolve()
 
-    output_dir = mcce_dir.joinpath(args1.get("output_dir", "crgms_corr"))
-    if not output_dir.exists():
-        output_dir.mkdir()
-
     p, e = args1.get("msout_file", "pH7eH0ms.txt")[:-4].lower().split("eh")
     ph = p.removeprefix("ph")
     eh = e.removesuffix("ms")
+
+    param_defaults = params_main(ph=ph)
+    output_dir = mcce_dir.joinpath(args1.get("output_dir", param_defaults["output_dir"]))
+    if not output_dir.exists():
+        output_dir.mkdir()
 
     h3_fp, msout_fp = get_mcce_input_files(mcce_dir, ph, eh)
 
@@ -1478,7 +1455,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
     # Combine free & fixed res with crg and save to csv:
     all_res_crg_df = combine_all_free_fixed_residues(free_res_crg_df, all_fixed_res_crg_df)
-    all_res_crg_csv = args1.get("all_res_crg_csv", f"all_res_crg_ph{ph}.csv")
+    all_res_crg_csv = args1.get("all_res_crg_csv", param_defaults["all_res_crg_csv"])
     all_res_crg_df.to_csv(output_dir.joinpath(all_res_crg_csv), index_label="Residue")
 
     # fixed res of interest info:
@@ -1488,7 +1465,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     n_fixed_resoi = fixed_resoi_crg_df.shape[0]
     if n_fixed_resoi:
         logger.info(f"Fixed res in residues of interest: {n_fixed_resoi}")
-        fixed_resoi_crg_df.to_csv(output_dir.joinpath(f"fixed_crg_resoi_ph{ph}.csv"), index=False)
+        fixed_resoi_crg_df.to_csv(output_dir.joinpath(f"fixed_crg_resoi.csv"), index=False)
     else:
         fixed_resoi_crg_df = None
         logger.info("No fixed residues of interest.")
@@ -1497,14 +1474,12 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     ms_orig_lst = [[ms.E, ms.count, ms.state] for ms in mc.sort_microstates()]
 
     # energies distribution plot:
-    save_name = args1.get("energy_histogram.save_name", f"enthalpy_dist_ph{ph}.png")
+    save_name = args1.get("energy_histogram.save_name", f"enthalpy_dist.png")
     fig_size = eval(args1.get("energy_histogram.fig_size", "(8,8)"))
     ms_energy_histogram(ms_orig_lst, output_dir, save_name, show=show_fig, fig_size=fig_size)
 
     id_vs_charge = iconf2crg(conformers)
     crg_orig_lst = ms2crgms(ms_orig_lst, id_vs_charge)
-
-    # xl_list = []  # for creating list of (df, dfname) if msa.dfs_to_excel is to be used.
 
     # processing for histograms, inputs in args2 dict:
     for hist_d in list(args2.values()):
@@ -1513,31 +1488,31 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
         bounds = hist_d.get("bounds")
         if bounds is None or "None" in bounds:
             ebounds = (None, None)
-            df2csv_name = args1.get("main_csv", f"all_crg_count_res_ph{ph}.csv")
-            save_name = hist_d.get("save_name", f"crgms_logcount_v_E_ph{ph}.png")
+            df2csv_name = args1.get("main_csv", f"all_crg_count_res.csv")
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_E.png")
         elif "Emin" in bounds:
             offset = float(bounds[:-1].split("+")[1].strip())
             # use lowest E of the charge microstates:
             ebounds = (crg_orig_lst[0][0], crg_orig_lst[0][0] + offset)
-            df2csv_name = f"low_crg_count_res_ph{ph}.csv"
-            save_name = hist_d.get("save_name", f"crgms_logcount_v_Emin_ph{ph}.png")
+            df2csv_name = f"low_crg_count_res.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Emin.png")
         elif "Eaver" in bounds:
             # use average E of the conformer microstates:
             offset = float(bounds[:-1].split("+")[1].strip())
             ebounds = (mc.average_E - offset, mc.average_E + offset)
-            df2csv_name = f"aver_crg_count_res_ph{ph}.csv"
-            save_name = hist_d.get("save_name", f"crgms_logcount_v_Eaver_ph{ph}.png")
+            df2csv_name = f"aver_crg_count_res.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Eaver.png")
         elif "Emax" in bounds:
             # use max E of the conformer microstates:
             offset = float(bounds[1:].split("-")[1].split(",")[0].strip())
             ebounds = (mc.highest_E - offset, mc.highest_E)
-            df2csv_name = f"high_crg_count_res_ph{ph}.csv"
-            save_name = hist_d.get("save_name", f"crgms_logcount_v_Emax_ph{ph}.png")
+            df2csv_name = f"high_crg_count_res.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Emax.png")
         else:  # free bounds
             b, e = bounds[1:-1].strip().split(",")
             ebounds = (float(b.strip()), float(e.strip()))
-            df2csv_name = f"range_crg_count_res_ph{ph}.csv"
-            save_name = hist_d.get("save_name", f"crgms_logcount_v_Erange{ph}.png")
+            df2csv_name = f"range_crg_count_res.csv"
+            save_name = hist_d.get("save_name", f"crgms_logcount_v_Erange.png")
 
         # compute:
         logger.info(f"Getting crgms data for energy bounds: {bounds}")
@@ -1554,7 +1529,6 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
         # save all crgms dfs:
         crg_count_df.to_csv(output_dir.joinpath(df2csv_name), header=True)
-        # xl_list.append((crg_count_df, out_df_name))
 
         if ebounds == (None, None):
             # preserve df for latter use:
@@ -1567,19 +1541,22 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
             )
 
     all_crg_df = add_fixed_res_crg(all_crg_count_res, fixed_resoi_crg_df)
-    crg_count_csv = output_dir.joinpath(f"all_crg_count_resoi_ph{ph}.csv")
+    crg_count_csv = output_dir.joinpath(f"all_crg_count_resoi.csv")
     all_crg_df.to_csv(crg_count_csv, header=True)
 
     if choose_res is not None:
         logger.info("Computing correlation for chosen resids...")
-        df_choose_res_data = choose_res_data(all_crg_df, correl_resids, fixed_resoi_crg_df)
+        df_choose_res_data = choose_res_data(all_crg_df, correl_resids)
         df_choose_res_data["Occupancy"] = round(df_choose_res_data["Count"] / sum(df_choose_res_data["Count"]), 2)
 
-        res_of_interest_data_csv = args1.get("res_of_interest_data_csv", f"crg_count_res_of_interest_ph{7}.csv")
+        res_of_interest_data_csv = args1.get("res_of_interest_data_csv", f"crg_count_res_of_interest.csv")
         df_choose_res_data.to_csv(output_dir.joinpath(res_of_interest_data_csv), header=True)
 
+        # Filter out fixed res from list:
+        chosen_free = filter_fixed_from_choose_res(fixed_resoi_crg_df, choose_res)
+
         # Relabel residues with shorter names:
-        df_chosen_res_renamed = rename_order_residues(df_choose_res_data)
+        df_chosen_res_renamed = rename_order_residues(df_choose_res_data, chosen_free)
 
         corr_method = args1.get("corr_method", "pearson")
         corr_cutoff = float(args1.get("corr_cutoff", 0))

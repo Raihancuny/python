@@ -32,14 +32,12 @@
   list_head3_ionizables = False
 
   # Files names:
-  # free and fixed residues charges:
-  all_res_crg_csv = all_res_crg_ph7.csv
 
-  # main csv file for free residues & residues of interest in charge microstates:
-  main_csv = all_crg_count_res_ph7.csv
+  # free and fixed residues charges:
+  all_res_crg_csv = all_res_crg_status.csv
 
   # residue of interest data (not renamed):
-  res_of_interest_data_csv = crg_count_res_of_interest_ph7.csv
+  res_of_interest_data_csv = crg_count_res_of_interest.csv
 
 
 # MICROSTATES FILE SELECTION
@@ -83,8 +81,8 @@
 # Plots:
 
   # Filenames:
-  energy_histogram.save_name = enthalpy_dist_ph7.png
-  corr_heatmap.save_name = corr_ph7.png
+  energy_histogram.save_name = enthalpy_dist.png
+  corr_heatmap.save_name = corr.png
 
   # Titles:
 
@@ -103,21 +101,21 @@
   # charge_histogram0: Always included, creates all_crg_count_res: no filtering, value = (None, None):
   charge_histogram0.bounds = (None, None)
   charge_histogram0.title = Protonation MS Energy
-  charge_histogram0.save_name = crgms_logcount_vs_E_ph7.png
+  charge_histogram0.save_name = crgms_logcount_vs_E.png
 
   charge_histogram1.bounds = (Emin, Emin + 1.36) 
   charge_histogram1.title = Protonation MS Energy within 1.36 kcal/mol of Lowest
-  charge_histogram1.save_name = crgms_logcount_vs_lowestE_ph7.png
+  charge_histogram1.save_name = crgms_logcount_vs_lowestE.png
 
   charge_histogram2.bounds = (Eaver - 0.68, Eaver + 0.68)
   charge_histogram2.title = Protonation MS Energy within 0.5 pH (0.68 kcal/mol) of Average
-  charge_histogram2.save_name = crgms_logcount_vs_averE_ph7.png
+  charge_histogram2.save_name = crgms_logcount_vs_averE.png
 
   charge_histogram3.bounds = (Emax - 1.36, Emax)
   charge_histogram3.title = Protonation MS Energy within 1.36 kcal/mol of Highest
-  charge_histogram3.save_name = crgms_logcount_vs_highestE_ph7.png
+  charge_histogram3.save_name = crgms_logcount_vs_highestE.png
 
   # example with free bounds:
   charge_histogramB.bounds = (-5, 5)
   charge_histogramB.title = Protonation MS Energy in (-5, 5) kcal/mol range
-  charge_histogramB.save_name = crgms_logcount_vs_highestE_ph7.png
+  charge_histogramB.save_name = crgms_logcount_vs_highestE.png

@@ -23,20 +23,17 @@
   # mcce_dir :: The directory of a MCCE run containing a ms_out subfolder :: Default: current directory.
   mcce_dir = 4lzt
 
-  # output_dir :: The mcce_dir subdirectory for saving the analysis files :: Default: crgms_corr.
+  # output_dir :: The mcce_dir subdirectory for saving the analysis files :: Default: crgms_corr_phX.
   #output_dir = crgms_corr
 
   #list_head3_ionizables = True
 
   # Files names:
   # free and fixed residues charges:
-  all_res_crg_csv = all_res_crg_ph7.csv
-
-  # main csv file for free residues & residues of interest in charge microstates:
-  main_csv = all_crg_count_res_ph7.csv
+  all_res_crg_csv = all_res_crg_status.csv
 
   # residue of interest data (not renamed):
-  res_of_interest_data_csv = crg_count_res_of_interest_ph7.csv
+  res_of_interest_data_csv = crg_count_res_of_interest.csv
 
 
 # MICROSTATES FILE SELECTION
@@ -84,8 +81,8 @@
 # Plots:
 
   # Filenames:
-  energy_histogram.save_name = enthalpy_dist_ph7.png
-  corr_heatmap.save_name = corr_ph7.png
+  energy_histogram.save_name = enthalpy_dist.png
+  corr_heatmap.save_name = corr.png
 
   # Titles:
 
@@ -104,9 +101,9 @@
   # charge_histogram0: Always included, creates all_crg_count_res: no filtering, value = (None, None):
   charge_histogram0.bounds = (None, None)
   charge_histogram0.title = Protonation MS Energy
-  charge_histogram0.save_name = crgms_logcount_vs_E_ph7.png
+  charge_histogram0.save_name = crgms_logcount_vs_E.png
   
   # example with free bounds:
   charge_histogramB.bounds = (-5, 5)
   charge_histogramB.title = Protonation MS Energy in (-5, 5) kcal/mol range
-  charge_histogramB.save_name = crgms_logcount_vs_highestE_ph7.png
+  charge_histogramB.save_name = crgms_logcount_vs_highestE.png
