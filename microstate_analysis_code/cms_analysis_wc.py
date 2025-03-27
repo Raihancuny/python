@@ -512,7 +512,9 @@ class WeightedCorr:
             raise ValueError(f"`method` should be one of {CORR_METHODS}.")
 
         # define which of the defined methods to use:
-        cor = {"pearson": self._pearson, "spearman": self._spearman}[method]
+        cor = self._pearson
+        if method == "spearman":
+            cor = self._spearman
 
         if self.df is None:  # run the method over series
             return cor()
@@ -785,9 +787,9 @@ def iconf2ires(free_residues: list) -> dict:
     return d
 
 
-def free_res2sumcrg_df(microstates: Union[dict, list], free_res: list, conformers: list) -> pd.DataFrame:
+def free_res2aver_crg_df(microstates: Union[dict, list], free_res: list, conformers: list) -> pd.DataFrame:
     """
-    Given a list of microstates and free residues, convert to net charge of each free residue
+    Given a list of microstates and free residues, convert to netaverage charge of each free residue
     into a pandas.DataFrame.
     Returns:
       None if conformers list is empty.
@@ -845,6 +847,9 @@ def ms2crgms(ll: list, dd: dict) -> list:
     Given a list with format: [[ms.E, ms.count, ms.state], ] sorted by E,
     and a dict mapping conformer indices to their charges, convert the conformer
     state list to to conformer charges.
+    Note:
+     This recursive function explodes the list of unique conformer ms to crg ms
+     to yield crg ms for the entire state space.
     """
     crg_lst = [
         [
@@ -972,10 +977,11 @@ def find_uniq_crgms_count_order(
     crg_all_count = {}
     unique_crg_state_order = 1
     for E, count, state in crg_list_ms:
-        if tuple(state) not in crg_all_count:
+        k = tuple(state)
+        if k not in crg_all_count:
             # initial k,v:
-            # k = tuple(crgms state); v = [count, [energy], [unique_crg_state_order]]
-            crg_all_count[tuple(state)] = [
+            # k = tuple(crgms state); v = [count, [energy], unique_crg_state_order]
+            crg_all_count[k] = [
                 count,
                 [E],
                 unique_crg_state_order,
@@ -983,19 +989,18 @@ def find_uniq_crgms_count_order(
             unique_crg_state_order += 1
         else:
             # same state: increment the total count of ms
-            crg_all_count[tuple(state)][0] += count
-
+            crg_all_count[k][0] += count
             # get the maximum and minimum energy
-            min_energy = min(min(crg_all_count[tuple(state)][1]), E)
-            max_energy = max(max(crg_all_count[tuple(state)][1]), E)
+            min_energy = min(min(crg_all_count[k][1]), E)
+            max_energy = max(max(crg_all_count[k][1]), E)
 
             # rest the energy list with the min and max energy so far:
-            crg_all_count[tuple(state)][1].clear()
-            crg_all_count[tuple(state)][1].append(min_energy)
-            crg_all_count[tuple(state)][1].append(max_energy)
+            crg_all_count[k][1].clear()
+            crg_all_count[k][1].append(min_energy)
+            crg_all_count[k][1].append(max_energy)
 
     # make a list of crgms counts, unique charge microstate, order and E difference.
-    all_crg_ms_unique = []
+    all_crg_ms_unique = []  # list of crg ms states
     all_count = []
     energy_diff_all = []
     unique_crg_state_order = []
@@ -1024,20 +1029,6 @@ def combine_all_free_fixed_residues(free_res_crg_df: pd.DataFrame, fixed_res_crg
     df.set_index("Residue", inplace=True)
 
     return df.T
-
-
-# TODO: Deprecate?
-def combine_free_fixed_residues0(
-    free_res_crg_count_df: pd.DataFrame, fixed_residue_df: pd.DataFrame
-) -> pd.DataFrame:
-
-    df_fixed_res_crg = fixed_residue_df.T
-    df_fixed_res_crg.columns = df_fixed_res_crg.iloc[0]
-    df_fixed_res_crg = df_fixed_res_crg.iloc[1:, :].reset_index(drop=True)
-    df_fixed_res_dup = pd.concat([df_fixed_res_crg] * len(free_res_crg_count_df), ignore_index=True)
-    df_all = free_res_crg_count_df.join(df_fixed_res_dup)
-
-    return df_all
 
 
 def concat_crgms_dfs(
@@ -1131,19 +1122,16 @@ def unique_crgms_histogram(
     This includes the background charge.
     To show the energy ranges in the plot hue parameter, set add_hue to True.
     """
-    x_av = [sum(x) + background_charge for x in charge_ms_info[0]]
-    y_av = [math.log10(x) for x in charge_ms_info[1]]
-
     hue_data, palet = None, None
     if add_hue:
         hue_data = charge_ms_info[3]  # E differences
         palet = "viridis"
 
-    palet
+    x_av = [sum(x) + background_charge for x in charge_ms_info[0]]
     g1 = sns.JointGrid(marginal_ticks=True, height=6)
     ax = sns.scatterplot(
         x=x_av,
-        y=y_av,
+        y=charge_ms_info[1],
         hue=hue_data,
         palette=palet,
         size=charge_ms_info[1],
@@ -1151,6 +1139,7 @@ def unique_crgms_histogram(
         legend="brief",
         ax=g1.ax_joint,
     )
+    plt.yscale('log')
 
     fs = 14  # font size for axes labels and title
     ax.set_xticks(range(int(min(x_av)), int(max(x_av)) + 1))
