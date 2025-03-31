@@ -43,7 +43,7 @@ try:
     from scipy.spatial.distance import pdist
     from scipy.stats import skewnorm, rankdata
 except ImportError as e:
-    print("Oops! Forgot to activate an appropriate environment?\n", e)
+    print("[CRITICAL] Oops! Forgot to activate an appropriate environment?\n", e)
     sys.exit(1)
 
 logging.basicConfig(
@@ -137,7 +137,7 @@ class MSout_np:
         mso = MSout_np(h3_fp, msout_fp)  # mc_load="all" by default.
         print(mso)
 
-        # Get topN lists using defaults: N = 5; min_occ = 0.01
+        # Get topN lists using defaults: N = 5; min_occ = 0.02
         top5_cms, top5_ms = mso.get_topN_lists()
         ```
     """
@@ -147,7 +147,7 @@ class MSout_np:
         loading_modes = ["conf", "crg", "all"]
         if mc_load.lower() not in loading_modes:
             print(
-                f"CRITICAL: argument mc_load must be one of {loading_modes}",
+                f"CRITICAL: Argument mc_load must be one of {loading_modes}",
                 "to load either conformer or charge microstates, or both.",
             )
             return
@@ -1301,7 +1301,7 @@ def ms_energy_distribution(
 
     fig_fp = out_dir.joinpath(save_name)
     fig.savefig(fig_fp, dpi=300, bbox_inches="tight")
-    print(f"Histogram figure saved as {fig_fp}")
+    print(f"Microstate energy distribution figure saved: {fig_fp!s}")
 
     if show:
         plt.show()
@@ -1326,6 +1326,7 @@ def crgms_energy_histogram(
     net_crg = data[:, 0]
 
     fs = 12  # font size for axes labels and title
+    
     g1 = sns.JointGrid(marginal_ticks=True, height=6)
     ax = sns.scatterplot(
         x=net_crg,
@@ -1408,7 +1409,7 @@ def corr_heatmap(
     else:
         msk = None
 
-    # fig = plt.figure(figsize=fig_size)
+    fig = plt.figure(figsize=fig_size)
 
     fs = 12  # font size
     ax = sns.heatmap(
@@ -1424,7 +1425,6 @@ def corr_heatmap(
         fmt=".2f",
         annot=True,
         annot_kws={"fontsize": 10},
-        figsize=fig_size,
     )
     ax.set(xlabel="", ylabel="")
     plt.yticks(fontsize=fs)
@@ -1437,7 +1437,7 @@ def corr_heatmap(
         else:
             fig_fp = Path(save_name)
 
-        plt.savefig(fig_fp, dpi=300, bbox_inches="tight")
+        fig.savefig(fig_fp, dpi=300, bbox_inches="tight")
         logger.info(f"Correlation heat map saved as {fig_fp}")
 
     if show:
@@ -1592,7 +1592,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
 
     csv_fp = output_dir.joinpath(args1.get("all_res_crg_csv", param_defaults["all_res_crg_csv"]))
     msg = (
-        f"Saving all_res_crg_df to {csv_fp!r}.\n",
+        f"Saving all_res_crg_df to {csv_fp!s}.\n",
         "Note: For residues with 'free' status, the charge is the average charge.",
     )
     logger.info(msg)
@@ -1607,7 +1607,7 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
         )
         msg = (
             f"Fixed res in residues of interest: {n_fixed_resoi}\n"
-            f"Saving fixed_resoi_crg_df to {csv_fp!r}.\n"
+            f"Saving fixed_resoi_crg_df to {csv_fp!s}.\n"
         )
         logger.info(msg)
         fixed_resoi_crg_df.to_csv(csv_fp, index=False)
@@ -1720,10 +1720,10 @@ def list_head3_ionizables(h3_fp: Path, as_string: bool = True) -> list:
     """
     h3_fp = Path(h3_fp)
     if h3_fp.name != "head3.lst":
-        print(f"File name not 'head3.lst': {h3_fp!s}")
+        logger.error(f"File name not 'head3.lst': {h3_fp!s}")
         return []
     if not h3_fp.exists():
-        print(f"Not found: {h3_fp!s}")
+        logger.error(f"Not found: {h3_fp!s}")
         return []
 
     h3_lines = [line.split()[1] for line in h3_fp.read_text().splitlines()[1:]]
@@ -1783,7 +1783,8 @@ def crgmsa_cli(argv=None):
     if list_ionizables is not None:
         if list_ionizables.capitalize() == "True":
             logger.info("List of ionizable residues in head3.lst:")
-            print(list_head3_ionizables(main_d.get("mcce_dir", ".") + "/head3.lst"))
+            print(list_head3_ionizables(main_d.get("mcce_dir", ".") + "/head3.lst",
+                                        as_string=True))
             sys.exit()
 
     # run the processing pipeline:
