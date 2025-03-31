@@ -47,6 +47,12 @@
 #
   msout_file = pH7eH0ms.txt
 
+# occupancy threshold used for returning unique charge ms:
+  min_occ = 0.02
+
+# n_top: number of unique charge ms to return
+  n_top = 5
+
 
 # RESIDUES SELECTION
 # ========================================================================================
