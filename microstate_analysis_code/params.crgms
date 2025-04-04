@@ -124,4 +124,4 @@
   # example with free bounds:
   charge_histogramB.bounds = (-5, 5)
   charge_histogramB.title = Protonation MS Energy in (-5, 5) kcal/mol range
-  charge_histogramB.save_name = crgms_logcount_vs_highestE.png
+  charge_histogramB.save_name = crgms_logcount_vs_rangeE.png

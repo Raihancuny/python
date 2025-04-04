@@ -1461,7 +1461,7 @@ def cluster_corr_matrix(corr_df: pd.DataFrame, n_clusters: int = 5) -> pd.DataFr
     dist_matrix = pdist(1 - np.abs(corr_df))
 
     # Perform hierarchical clustering
-    linkage_matrix = linkage(dist_matrix, method="complete")  # "ward")
+    linkage_matrix = linkage(dist_matrix, method="complete")
 
     if n_clusters < 3:
         n_clusters = 3
@@ -1746,20 +1746,28 @@ def crgmsa_parser() -> ArgumentParser:
 Stand-alone charge microstate analysis with correlation.
 Can be used without the mcce program & its codebase.
 The only command line option is the parameters file.
-
+"""
+    USAGE = """
 CALL EXAMPLE:
   python cms_analysis_wc.py params.crgms
 
+OR, if you copied cms_analysis_wc.py in your user/bin folder:
+  cms_analysis_wc.py params.crgms
+
+The input parameter file must be found at the location where
+the module is called.  
+
 Note:
-  If you add this line:
+  If you add this line in your input parameter file:
      list_head3_ionizables = true
-  in your parameter file, the program will list the resids in head3.lst
-  and exit; The list or a portion thereof can then be used as values to
+  the program will list the resids in head3.lst and exit;
+  The list or a portion thereof can then be used as values to
   the 'correl_resids' identifier.
 """
     p = ArgumentParser(
         prog="cms analysis with correlation",
         description=DESC,
+        usage=USAGE,
         formatter_class=RawDescriptionHelpFormatter,
     )
     p.add_argument("params_file", type=str, help="The input parameters file.")
