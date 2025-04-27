@@ -102,22 +102,33 @@ def show_elapsed_time(start_t: time, info: str = None):
         print(f"{info} - Elapsed time: {elapsed:,.2f} s ({elapsed/60:,.2f} min).")
     return
 
+# FIX: REDO estimate
+def topN_loadtime_estimate(n_freeres: int) -> str:
+    """Returns the time estimate given the number of free residues
+    for reading the mc lines to getting the topN ms in a formattted
+    string showing seconds and minutes.
+    """
+    # fit of 5 runs:
+    # -2 offset: improvements since fit
+    return round(-14.9897855 -2 + 0.451883977*n_freeres + 6.25518650e-04*n_freeres**2)
+
 
 class MSout_np:
-    """Class to load 'msout file' to obtain MCCE microstates information in numpy.arrays.
+    """Class to load 'msout file' to obtain MCCE microstates data in numpy.arrays.
     * Naming convention:
         - 'charge ms', 'crg ms' and 'cms' are shortcuts for protonation microstate.
         - 'ms' is a shortcut for conformational microstate.
+        - 'msout file' refers to the .txt file in the ms_out subfolder of an mcce run
+           and starts with 'pH<ph>'.
 
     Arguments:
         - head3_file, msout_file (str): Paths to head3.lst & msout files.
         - mc_load (str): Specifies what to load from the msout file:
            - 'all': crg and conf ms.
-           - 'conf': conformal ms only (as in ms_analysis.MSout class);
+           - 'conf': conformation ms only (as in ms_analysis.MSout class);
            - 'crg': protonation ms only;
         - res_kinds (list): List of 3-letter residue/ligand names, e.g. ['GLU', 'HEM'];
-          Note: This list is used in the construction of the head3 lookup array,
-                `MSout_np.conf_info`, but that array is unused if mc_load is 'conf'.
+          Defaults to IONIZABLES with mc_load='all' or 'crg'.
 
     Details:
         1. Reads head3.lst & the msout file header and creates a conformer data
@@ -131,30 +142,40 @@ class MSout_np:
         from msout_np import MSout_np
 
         h3_fp = "path/to/head3.lst"
-        msout_fp = "path/to/ms_out/msout_file"
+        msout_fp = "path/to/ms_out/msout_file/filename"
 
-        mso = MSout_np(h3_fp, msout_fp
-        mso = MSout_np(h3_fp, msout_fp)  # mc_load="all" by default.
+        # using defaults: mc_load="all", res_kinds=IONIZABLES, loadtime_estimate=False
+        mso = MSout_np(h3_fp, msout_fp)
         print(mso)
 
-        # Get topN lists using defaults: N = 5; min_occ = 0.02
+        # run get_uniq_ms() method, which will populate mso.uniq_cms (as per mc_load)
+        mso.get_uniq_ms()
+ 
+        # Get topN data using defaults: N = 5; min_occ = 0.0
         top5_cms, top5_ms = mso.get_topN_lists()
         ```
     """
+    def __init__(self, head3_file: str, msout_file: str,
+                 mc_load: str = "all",
+                 res_kinds: list = None,
+                 loadtime_estimate: bool = False,
+                 ):
 
-    def __init__(self, head3_file: str, msout_file: str, mc_load: str = "all", res_kinds: list = None):
         # valid loading modes:
         loading_modes = ["conf", "crg", "all"]
         if mc_load.lower() not in loading_modes:
-            print(
-                f"CRITICAL: Argument mc_load must be one of {loading_modes}",
-                "to load either conformer or charge microstates, or both.",
-            )
+            print("Argument mc_load must be one of", loading_modes ,
+                  "to load either conformer or charge microstates, or both.")
             return
 
         self.mc_load = mc_load.lower()
         self.msout_file = msout_file
-        self.res_kinds = res_kinds
+        if res_kinds is None:
+            if self.mc_load != "conf":
+                self.res_kinds = IONIZABLES
+        else:
+            # TODO: test res_kinds with mc_load="conf"
+            self.res_kinds = res_kinds
 
         # attributes populated by self.load_header:
         self.T: float = 298.15
@@ -169,59 +190,53 @@ class MSout_np:
         self.N_resid: int = None
         # conformer lookup table using head3 data:
         self.conf_info: np.ndarray = None
-        # list of free & ionizable residues
+        self.conf_ids: np.ndarray = None
+        # list of resids defining a cms:
         self.cms_resids: list = None
+        # sum crg of fixed res:
         self.background_crg: int = None
 
         # attributes populated by the 'load' functions:
-        self.N_confms: int = 0  # conformal state space
-        self.N_cms: int = None  # total number of crg (protonation) ms
-        # np.arrays to receive the lists of conf/crg ms:
+        self.N_space: int = None     # size of conformal state space
+        self.N_mc_lines: int = None  # total number of mc lines (accepted states data)
+        self.N_cms: int = None       # total number of crg (protonation) ms
+        # np.arrays to receive the lists of conf/crg ms: 
         self.all_ms: np.ndarray = None
         self.all_cms: np.ndarray = None
 
         # attributes populated by the 'get_uniq_' functions:
         self.uniq_ms: np.ndarray = None
-        self.N_ms_uniq: int = None  # unique number of conf ms
         self.uniq_cms: np.ndarray = None
+        self.N_ms_uniq: int = None  # unique number of conf ms
         self.N_cms_uniq: int = None  # unique number of crg ms
 
         # load msout file header data:
         self.load_header()
+
         # create the head3 lookup array:
-        self.conf_info, self.cms_resids = self.get_conf_info(head3_file)
-        self.N_confs = len(self.conf_info)
+        self.conf_info, self.cms_resids, self.conf_ids = self.get_conf_info(head3_file)
+        self.N_confs = len(self.conf_ids)
         self.N_resid = len(self.cms_resids)
         # fields :: [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
-        # sumcrg for is_fixed
-        self.background_crg = self.conf_info[np.where(self.conf_info[:, 4]), -1].sum()
+        # sumcrg for is_fixed:
+        self.background_crg = self.conf_info[np.where(self.conf_info[:, -4]), -1].sum()
 
         # load accepted states:
         if self.mc_load == "crg":
             start_t = time.time()
             self.load_crg()
             show_elapsed_time(start_t, info="Loading msout for cms")
-            start_t = time.time()
-            self.get_uniq_cms()
-            show_elapsed_time(start_t, info="Getting unique data for cms")
         elif self.mc_load == "conf":
             start_t = time.time()
             self.load_conf()
             show_elapsed_time(start_t, info="Loading msout for conf ms")
-            start_t = time.time()
-            self.get_uniq_conf()
-            show_elapsed_time(start_t, info="Getting unique data for conf ms")
         elif self.mc_load == "all":
+            if loadtime_estimate:
+                yt = topN_loadtime_estimate(len(self.free_residues))
+                print(f"\nESTIMATED TIME to topN: {yt:,.2f} s ({yt/60:,.2f} min).\n")
             start_t = time.time()
             self.load_all()
             show_elapsed_time(start_t, info="Loading msout for ms & cms")
-            start_t = time.time()
-            # if getting "all", it's assume that crg ms are the main focus,
-            # thus there is no need to get the unique conf ms here.
-            # The equivalent function for conformers, `.get_uniq_all_ms()`
-            # is available if needed.
-            self.get_uniq_all_cms()
-            show_elapsed_time(start_t, info="Getting unique data for cms in 'all' mode")
         else:
             print("No processing function associated with:", self.mc_load)
 
@@ -229,8 +244,7 @@ class MSout_np:
 
     def load_header(self):
         """Process an unadulterated 'msout file' header rows to populate
-        these attributes: self.T, self.pH, self.Eh, self.fixed_iconfs,
-          self.free_residues, self.iconf2ires.
+        these attributes: T, pH, Eh, fixed_iconfs, free_residues, iconf2ires.
         """
         with open(self.msout_file) as fh:
             head = list(islice(fh, 6))
@@ -266,22 +280,26 @@ class MSout_np:
                         self.iconf2ires[iconf] = idx
         return
 
-    def get_conf_info(self, h3_fp: str) -> Tuple[np.ndarray, list]:
-        """Populate 'MSout_np.conf_info' which is a lookup table for iconfs, resids,
-        and charges initially from head3.lst, and 'MSout_np.cms_resids' which is the list
-        of unique, free & ionizable resids in a MCCE simulation.
+    def get_conf_info(self, h3_fp: str) -> Tuple[np.ndarray, list, np.ndarray]:
+        """Output these variables:
+         - conf_info (np.ndarray): a lookup 'table' for iconfs, resids, and charges
+           initially from head3.lst;
+         - cms_resids (list): list of unique, free & ionizable resids in a MCCE simulation;
+         - conf_ids (np.ndarray): array of iconfs, confids;
+
         Note:
-        Final extended format: [iconf, resid, is_fixed, is_free, resix, crg], which include 'is_fixed'
-        field is needed for proper accounting of net charge.
+        Final extended format of conf_info:
+          [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg];
+        Field 'is_fixed' is needed for proper accounting of net charge.
         """
         with open(h3_fp) as h3:
             lines = h3.readlines()[1:]
 
         conf_info = []
+        conf_vec = []
         for line in lines:
             # ignored columns: FL, Occ & fields beyond crg
             iConf, confid, _, _, Crg, *_ = line.split()
-
             iconf = int(iConf) - 1  # as python index
             kind = confid[:3]
             resid = kind + confid[5:11]
@@ -298,36 +316,38 @@ class MSout_np:
             is_fixed = int(iconf in self.fixed_iconfs)
             # conf_info last 3 :: [..., is_free, resix, crg]
             conf_info.append([iconf, resid, in_kinds, is_ioniz, is_fixed, 0, 0, crg])
-
-        # list temp structure is set & has h3 info; cast to np.ndarray:
+            conf_vec.append([iconf, confid])
+        # temp list structure is now set & has h3 info; cast to np.ndarray:
         conf_info = np.array(conf_info, dtype=object)
+        conf_ids = np.array(conf_vec, dtype=object)
 
         # update conf_info: use free iconfs from free_residues to
         # populate the 'is_free' field.
         free_iconfs = [ic for free in self.free_residues for ic in free]
-        conf_info[free_iconfs, 5] = 1
+        conf_info[free_iconfs, -3] = 1
 
         # get cms unique resids list via filtering conf_info for valid confs for
         # protonation state vec: ionizable & free & in user list if given.
-
-        # conf_info :: [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
-        sum_conditions = conf_info[:, 3] + conf_info[:, 5]
+        # conf_info: [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
+        sum_conditions = conf_info[:, 3] + conf_info[:, -3]   # ionizable & free
         sum_tot = 2
         if self.res_kinds:
-            sum_conditions = sum_conditions + conf_info[:, 2]
+            # in_kinds & is_ioniz & is_free
+            sum_conditions = conf_info[:, 2] + sum_conditions
             sum_tot = 3
         # Note: dict in use instead of a set (or np.unique) to preserve the order:
         d = defaultdict(int)
         for r in conf_info[np.where(sum_conditions == sum_tot)][:, 1]:
             d[r] += 1
+        # uniq resids to list:
         cms_resids = list(d.keys())
 
         # create mapping from confs space to protonation resids space:
-        # update conf_info resix field with the index from cms_resids:
-        # conf_info :: [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
+        # update conf_info resix field with the index from cms_resids list:
+        # conf_info: [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
 
-        # FIXED: Getting resix w/o checking again for is_free was not sufficient,
-        #  e.g. GLUA0007; iconfs 12, 13, 14 needed resix = -1, since not free:
+        # Getting resix w/o checking again for is_free was not sufficient,
+        # e.g. GLUA0007; iconfs 12, 13, 14 needed resix = -1, since not free:
         # [12 'GLUA0007_' 1 0 0 2 0]
         # [13 'GLUA0007_' 1 0 0 2 0]
         # [14 'GLUA0007_' 1 0 0 2 0]
@@ -341,125 +361,35 @@ class MSout_np:
             except ValueError:
                 # put sentinel flag for unmatched res:
                 resix = -1
-            conf_info[i][6] = resix
+            conf_info[i][-2] = resix
 
-        print(
-            "Head3 lookup array 'conf_info'\n\tfields ::",
-            "[iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]\n",
-        )
-        return conf_info, cms_resids
+        print("\nHead3 lookup array 'conf_info'\n\tfields ::",
+              "iconf:0, resid:1, in_kinds:2, is_ioniz:3,",
+              "is_fixed:4, is_free:5, resix:6, crg:7\n")
+        return conf_info, cms_resids, conf_ids
 
-    def get_free_residues_df(self) -> pd.DataFrame:
-        """Extract resid for is_free from lookup array into a pandas.DataFrame."""
-        free_residues_df = pd.DataFrame(
-            self.conf_info[np.where(self.conf_info[:, -3]), 1][0], columns=["Residue"]
-        )
-        free_residues_df.drop_duplicates(inplace=True)
-        return free_residues_df
-
-    def get_fixed_residues(self) -> np.ndarray:
-        """Extract resid, crg for is_ioniz & is_fixed from lookup array."""
-        is_ioniz_fixed = self.conf_info[np.where(np.logical_and(self.conf_info[:, 3], self.conf_info[:, 4]))]
-        return is_ioniz_fixed[:, [1, -1]]
-
-    def get_fixed_residues_df(self) -> pd.DataFrame:
-        all_fixed_res_crg = self.get_fixed_residues()
-        return pd.DataFrame(all_fixed_res_crg, columns=["Residue", "crg"])
-
-    def get_fixed_res_of_interest(self) -> np.ndarray:
-        """Extract resid, crg for in_kinds & is_ioniz & is_fixed from lookup array."""
-        in_kinds_ioniz = self.conf_info[np.where(np.logical_and(self.conf_info[:, 2], self.conf_info[:, 3]))]
-        in_kinds_ioniz_fixed = in_kinds_ioniz[np.where(in_kinds_ioniz[:, 4])]
-        return in_kinds_ioniz_fixed[:, [1, -1]]
-
-    def get_fixed_res_of_interest_df(self) -> pd.DataFrame:
-        fixed_resoi = self.get_fixed_res_of_interest()
-        return pd.DataFrame(fixed_resoi, columns=["Residue", "crg"])
-
-    def load_crg(self):
-        """Process the accepted microstates lines to populate a list of
-        [state, totE, averE, count] items, where state is a list of protonation
-        microstates for the free & ionizable residues in the simulation.
-        This list is then assignedd to MCout.all_cms as a numpy.array.
+    def get_ter_dict(self) -> dict:
+        """Return a dict for res with multiple entries, such as
+        terminal residues.
+        Sample output, dict: {'A0001': ['NTR', 'LYS'],
+                              'A0129': ['LEU', 'CTR']}
         """
-        # print("Loading function: load_crg")
-        found_mc = False
-        newmc = False
-        ro = -1
-        # list to hold crg ms info:
-        cms_vec = []
+        ter_dict = defaultdict(list)
+        for confid in self.conf_ids[:,1]:
+            res = confid[:3]
+            res_id = confid[5:].split("_")[0]
+            # order needed, can't use set():
+            if res not in ter_dict[res_id]:
+                ter_dict[res_id].append(res)
 
-        msout_data = reader_gen(self.msout_file)
-        for lx, line in enumerate(msout_data):
-            if lx < 7:
-                continue
-            line = line.strip()
-            if not line or line[0] == "#":
-                continue
-            else:
-                # find the next MC record, e.g. MC:4
-                if line.startswith("MC:"):
-                    found_mc = True
-                    newmc = True
-                    continue
+        return dict((k, v) for k, v in ter_dict.items() if len(v) > 1)
 
-                if newmc:
-                    ro += 1  # will be 0 at "MC:0" + 1 line
-                    # line with candidate state for MC sampling, e.g.:
-                    # 41:0 3 16 29 41 52 54 68 70 73 ... # ^N: number of free iconfs in state
-                    state_e = 0.0
-                    current_state = [int(i) for i in line.split(":")[1].split()]
-
-                    # cms_vec :: [state, totE, averE, count]
-                    cms_vec.append([[0] * len(self.cms_resids), 0, 0, 0])
-                    # update cms_vec state:
-                    curr_info = self.conf_info[current_state]
-                    # conf criterion: ionizable, free, and in res_kinds if provided => resix != -1
-                    # [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
-                    upd = curr_info[np.where(curr_info[:, 6] != -1)][:, 6:]  # -> [resix, crg]
-                    for u in upd:
-                        cms_vec[ro][0][u[0]] = u[1]
-                    newmc = False
-                    continue
-
-                if found_mc:
-                    fields = line.split(",")
-                    if len(fields) >= 3:
-                        state_e = float(fields[0])
-                        count = int(fields[1])
-                        flipped = [int(c) for c in fields[2].split()]
-                        for ic in flipped:
-                            ir = self.iconf2ires[ic]
-                            current_state[ir] = ic
-
-                        # flipped iconfs from non-ionizable or fixed res
-                        # => same protonation state: increment totE & count;
-                        # Note: -1 is a sentinel index for this situation.
-                        update_cms = np.all(self.conf_info[flipped, 6] == -1)
-                        if update_cms:
-                            # cms_vec ::  [state, totE, averE, count]
-                            cms_vec[ro][1] += state_e * count
-                            cms_vec[ro][3] += count
-                            cms_vec[ro][2] = cms_vec[ro][1] / cms_vec[ro][3]
-                        else:
-                            ro += 1
-                            cms_vec.append([[0] * len(self.cms_resids), state_e * count, state_e, count])
-                            curr_info = self.conf_info[current_state]
-                            upd = curr_info[np.where(curr_info[:, 6] != -1)][:, 6:]  # -> [resix, crg]
-                            for u in upd:
-                                cms_vec[ro][0][u[0]] = u[1]
-                    else:
-                        continue
-
-        self.all_cms = np.array(cms_vec, dtype=object)
-        self.N_confms = self.all_cms[:, -1].sum()
-        self.N_cms = len(self.all_cms)
-
-        return
 
     def load_conf(self):
-        """Process the 'msout file' mc lines to output conformal
-        microstates with E.
+        """Process the 'msout file' mc lines to populate a list of
+        [state, state.E, count] items, where state is a list of conformal
+        microstates.
+        This list is then assignedd to MCout.all_ms as a numpy.array.
         """
         # print("Loading function: load_conf")
         found_mc = False
@@ -503,15 +433,100 @@ class MSout_np:
                         continue
 
         self.all_ms = np.array(ms_vec, dtype=object)
-        self.N_confms = self.all_ms[:, -1].sum()
+        self.N_mc_lines = len(self.all_ms)
+        print(f"Accepted states lines: {len(self.N_mc_lines):,}\n")
+        self.N_space = self.all_ms[:, -1].sum()
+
+        return
+
+    def load_crg(self):
+        """Process the accepted microstates lines to populate a list of
+        [state, totE, averE, count] items, where state is a list of protonation
+        microstates for the free & ionizable residues in the simulation.
+        This list is then assignedd to MCout.all_cms as a numpy.array.
+        """
+        found_mc = False
+        newmc = False
+        ro = -1
+        # list to hold crg ms info:
+        cms_vec = []
+
+        msout_data = reader_gen(self.msout_file)
+        for lx, line in enumerate(msout_data):
+            if lx < 7:
+                continue
+            line = line.strip()
+            if not line or line[0] == "#":
+                continue
+            else:
+                # find the next MC record, e.g. MC:4
+                if line.startswith("MC:"):
+                    found_mc = True
+                    newmc = True
+                    continue
+
+                if newmc:
+                    ro += 1  # will be 0 at "MC:0" + 1 line
+                    # line with candidate state for MC sampling, e.g.:
+                    # 41:0 3 16 29 41 52 54 68 70 73 ... # ^N: number of free iconfs in state
+                    state_e = 0.0
+                    current_state = [int(i) for i in line.split(":")[1].split()]
+
+                    # cms_vec :: [state, totE, averE, count]
+                    cms_vec.append([[0] * len(self.cms_resids), 0, 0, 0])
+                    # update cms_vec state:
+                    curr_info = self.conf_info[current_state]
+
+                    # acceptable conformer: ionizable, free, and in res_kinds if provided, meaning
+                    # field 'resix' has a valid index (positive int) => resix != -1
+                    # [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
+                    upd = curr_info[np.where(curr_info[:, -2] != -1)][:, -2:]  # -> [resix, crg]
+                    for u in upd:
+                        cms_vec[ro][0][u[0]] = u[1]
+                    newmc = False
+                    continue
+
+                if found_mc:
+                    fields = line.split(",")
+                    if len(fields) >= 3:
+                        state_e = float(fields[0])
+                        count = int(fields[1])
+                        flipped = [int(c) for c in fields[2].split()]
+                        for ic in flipped:
+                            ir = self.iconf2ires[ic]
+                            current_state[ir] = ic
+
+                        # flipped iconfs from non-ionizable or fixed res
+                        # => same protonation state: increment totE & count;
+                        # Note: -1 is a sentinel index for this situation.
+                        update_cms = np.all(self.conf_info[flipped, -2] == -1)
+                        if update_cms:
+                            # cms_vec ::  [state, totE, averE, count]
+                            cms_vec[ro][1] += state_e * count
+                            cms_vec[ro][3] += count
+                            cms_vec[ro][2] = cms_vec[ro][1] / cms_vec[ro][3]
+                        else:
+                            ro += 1
+                            cms_vec.append([[0] * len(self.cms_resids), state_e * count, state_e, count])
+                            curr_info = self.conf_info[current_state]
+                            upd = curr_info[np.where(curr_info[:, -2] != -1)][:, -2:]  # -> [resix, crg]
+                            for u in upd:
+                                cms_vec[ro][0][u[0]] = u[1]
+                    else:
+                        continue
+
+        self.all_cms = np.array(cms_vec, dtype=object)
+        self.N_space = self.all_cms[:, -1].sum()
+        self.N_cms = len(self.all_cms)
+        print(f"Protonation microstates: {len(self.N_cms):,}\n")
 
         return
 
     def load_all(self):
         """Process the 'msout file' mc lines to output both conformal
-        and protonation microstates, aka ms and crg ms.
+        and protonation microstates to numpy.arrays MSout_np.all_ms 
+        and MSout_np.all_cms.
         """
-        # print("Loading function: load_all")
         found_mc = False
         newmc = False
         ro = -1  # list item accessor
@@ -544,7 +559,7 @@ class MSout_np:
                     cms_vec.append([ro, [0] * len(self.cms_resids), 0, 0, 0])
                     # update cms_vec state:
                     curr_info = self.conf_info[current_state]
-                    upd = curr_info[np.where(curr_info[:, 6] != -1)][:, 6:]  # -> [resix, crg]
+                    upd = curr_info[np.where(curr_info[:, -2] != -1)][:, -2:]  # -> [resix, crg]
                     for u in upd:
                         cms_vec[ro][1][u[0]] = u[1]
                     newmc = False
@@ -565,7 +580,7 @@ class MSout_np:
                         # if the flipped iconfs are from non-ionizable or fixed res,
                         # the protonation state is the same: increment count & E;
                         # Note: -1 is a sentinel index for this situation.
-                        update_cms = np.all(self.conf_info[flipped, 6] == -1)
+                        update_cms = np.all(self.conf_info[flipped, -2] == -1)
                         if update_cms:
                             # cms_vec ::  [idx, state, totE, averE, count]
                             cms_vec[ro][2] += state_e * count
@@ -576,22 +591,54 @@ class MSout_np:
                             cms_vec.append([ro, [0] * len(self.cms_resids), state_e * count, state_e, count])
 
                             curr_info = self.conf_info[current_state]
-                            upd = curr_info[np.where(curr_info[:, 6] != -1)][:, 6:]  # -> [resix, crg]
+                            upd = curr_info[np.where(curr_info[:, -2] != -1)][:, -2:]  # -> [resix, crg]
                             for u in upd:
                                 cms_vec[ro][1][u[0]] = u[1]
 
         self.all_cms = np.array(cms_vec, dtype=object)
-        self.all_ms = np.array(ms_vec, dtype=object)
         self.N_cms = len(self.all_cms)
-        self.N_confms = self.all_ms[:, -1].sum()
+        self.all_ms = np.array(ms_vec, dtype=object)
+        self.N_mc_lines = len(self.all_ms)
+        print(f"Accepted states lines: {self.N_mc_lines:,}\n")
+        print(f"Protonation microstates: {self.N_cms:,}\n")
+        self.N_space = self.all_ms[:, -1].sum()
 
         return
+
+    def get_uniq_ms(self):
+        """Semaphore function to call the 'get unique' function corresponding
+        to .mc_load loading mode.
+        Note:
+          If the loading mode is "all", it's assume that crg ms are the main
+          focus thus, there is no need to get the unique conf ms as well.
+          The equivalent function for conformers, `.get_uniq_all_ms()`
+          is available if needed.
+        """
+        if self.mc_load == "conf":
+            start_t = time.time()
+            self.get_uniq_conf()
+            show_elapsed_time(start_t, info="Populating .uniq_ms array")
+            print(f"Unique conformer microstates: {self.N_cms_uniq:,}\n")
+
+        elif self.mc_load == "crg":
+            start_t = time.time()
+            self.get_uniq_cms()
+            show_elapsed_time(start_t, info="Populating .uniq_cms array")
+            print(f"Unique protonation microstates: {self.N_cms_uniq:,}\n")
+
+        elif self.mc_load == "all":
+            start_t = time.time()
+            self.get_uniq_all_cms()
+            show_elapsed_time(start_t, info="Populating .uniq_cms array, 'all' mode")
+            print(f"Unique protonation microstates: {self.N_cms_uniq:,}\n")
+
+        else:
+            print(f"WARNING: No processing function associated with: {self.mc_load}")
 
     def get_uniq_cms(self):
         """Assign unique crg ms info (state, totE, averE, count) to self.uniq_cms;
         Assign count of unique cms to self.N_cms_uniq.
         """
-        # print("Function: get_uniq_cms")
         subtot_d = {}
         # crg_e ::  [state, totE, averE, count]
         for ix, itm in enumerate(self.all_cms):
@@ -601,7 +648,7 @@ class MSout_np:
                 subtot_d[key][3] += itm[3]
                 subtot_d[key][2] = subtot_d[key][1] / subtot_d[key][3]
             else:
-                subtot_d[key] = deepcopy(itm)
+                subtot_d[key] = itm.copy()
 
         self.N_cms_uniq = len(subtot_d)
         # add occ, sort by count & assign to self.uniq_cms as np.array:
@@ -609,7 +656,7 @@ class MSout_np:
         self.uniq_cms = np.array(
             sorted(
                 [
-                    [list(k), subtot_d[k][1], subtot_d[k][2], subtot_d[k][3] / self.N_confms, subtot_d[k][3]]
+                    [list(k), subtot_d[k][1], subtot_d[k][2], subtot_d[k][3] / self.N_space, subtot_d[k][3]]
                     for k in subtot_d
                 ],
                 key=lambda x: x[-1],
@@ -625,11 +672,9 @@ class MSout_np:
         Assign count of unique ms to self.N_ms_uniq.
         """
         if self.mc_load != "conf":
-            print("Redirecting to 'get_uniq_all_ms' function as per 'mc_load'.")
+            print("WARNING: Redirecting to 'get_uniq_all_ms' function as per 'mc_load'.")
             self.get_uniq_all_ms()
             return
-
-        # print("Function: get_uniq_conf")
         # ms in ::  [state, state.e, count]
         subtot_d = {}
         for _, itm in enumerate(self.all_ms):
@@ -637,26 +682,25 @@ class MSout_np:
             if key in subtot_d:
                 subtot_d[key][2] += itm[2]
             else:
-                subtot_d[key] = deepcopy(itm)
+                subtot_d[key] = itm.copy()
 
         self.N_ms_uniq = len(subtot_d)
         # add occ, sort by count & assign to self.uniq_ms as np.array:
         # ms out ::  [state, state.e, occ, count]
         mslist = [
-            [list(k), subtot_d[k][1], subtot_d[k][-1] / self.N_confms, subtot_d[k][-1]] for k in subtot_d
+            [list(k), subtot_d[k][1], subtot_d[k][-1] / self.N_space, subtot_d[k][-1]] for k in subtot_d
         ]
         self.uniq_ms = np.array(sorted(mslist, key=lambda x: x[-1], reverse=True), dtype=object)
         return
 
     def get_uniq_all_cms(self):
         """Get the unique charge ms array when the `all_cms` array
-        was produced together with the `all_ms` array.
+        was produced together with the `all_ms` array, i.e. mc_load='all'.
         In this case, each of their items starts with an index,
         which can be used to match conf ms to each unique cms.
         """
-        # print("Function: get_uniq_all_cms")
         subtot_d = {}
-        # crg_e :: [idx, state, totE, averE, count]
+        # vec :: [idx, state, totE, averE, count]
         for ix, itm in enumerate(self.all_cms):
             key = tuple(itm[1])
             if key in subtot_d:
@@ -664,9 +708,11 @@ class MSout_np:
                 subtot_d[key][4] += itm[4]
                 subtot_d[key][3] = subtot_d[key][2] / subtot_d[key][4]
             else:
-                subtot_d[key] = deepcopy(itm)
+                subtot_d[key] = itm.copy()
 
         self.N_cms_uniq = len(subtot_d)
+        print(f"Unique protonation microstates: {self.N_cms_uniq:,}")
+
         # add occ, sort by count & assign to self.uniq_cms as np.array:
         # crg ms ::  [idx, state, totE, averE, occ, count]
         self.uniq_cms = np.array(
@@ -677,7 +723,7 @@ class MSout_np:
                         list(k),
                         subtot_d[k][2],
                         subtot_d[k][3],
-                        subtot_d[k][4] / self.N_confms,
+                        subtot_d[k][4] / self.N_space,
                         subtot_d[k][4],
                     ]
                     for k in subtot_d
@@ -691,7 +737,6 @@ class MSout_np:
         return
 
     def get_uniq_all_ms(self):
-        # print("Function: get_uniq_all_ms")
         # ms in ::  [idx, state, state.e, count]
         subtot_d = {}
         for _, itm in enumerate(self.all_ms):
@@ -699,17 +744,44 @@ class MSout_np:
             if key in subtot_d:
                 subtot_d[key][3] += itm[3]
             else:
-                subtot_d[key] = deepcopy(itm)
+                subtot_d[key] = itm.copy()
 
         self.N_ms_uniq = len(subtot_d)
         # add occ, sort by count & assign to self.uniq_ms as np.array:
         # ms out ::  [idx, state, state.e, occ, count]
         mslist = [
-            [subtot_d[k][0], list(k), subtot_d[k][2], subtot_d[k][-1] / self.N_confms, subtot_d[k][-1]]
+            [subtot_d[k][0], list(k), subtot_d[k][2], subtot_d[k][-1] / self.N_space, subtot_d[k][-1]]
             for k in subtot_d
         ]
         self.uniq_ms = np.array(sorted(mslist, key=lambda x: x[-1], reverse=True), dtype=object)
         return
+    
+    def get_free_residues_df(self) -> pd.DataFrame:
+        """Extract resid for is_free from lookup array into a pandas.DataFrame."""
+        free_residues_df = pd.DataFrame(self.conf_info[np.where(self.conf_info[:, -3]), 1][0],
+                                        columns=["Residue"])
+        free_residues_df.drop_duplicates(inplace=True)
+        return free_residues_df
+
+    def get_fixed_residues_arr(self) -> np.ndarray:
+        """Extract resid, crg for is_ioniz & is_fixed from lookup array."""
+        # [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
+        is_ioniz_fixed = self.conf_info[np.where(np.logical_and(self.conf_info[:, 3],
+                                                                self.conf_info[:, 4]))]
+        return is_ioniz_fixed[:, [1, -1]]
+
+    def get_fixed_residues_df(self) -> pd.DataFrame:
+        return pd.DataFrame(self.get_fixed_residues_arr(), columns=["Residue", "crg"])
+
+    def get_fixed_res_of_interest_arr(self) -> np.ndarray:
+        """Extract resid, crg for in_kinds & is_fixed from lookup array."""
+        # [iconf, resid, in_kinds, is_ioniz, is_fixed, is_free, resix, crg]
+        return self.conf_info[np.where(np.logical_and(self.conf_info[:, 2],
+                                                      self.conf_info[:, 4]))][:, [1, -1]]
+
+    def get_fixed_res_of_interest_df(self) -> pd.DataFrame:
+        return pd.DataFrame(self.get_fixed_res_of_interest_arr(),
+                            columns=["Residue", "crg"])
 
     def get_cms_energy_stats(self) -> Tuple[float, float, float]:
         """Return the minimum, average, and maximum energies of the cms in .all_cms."""
@@ -722,20 +794,16 @@ class MSout_np:
         return round(np.min(ms_e), 2), round(np.mean(ms_e), 2), round(np.max(ms_e), 2)
 
     @staticmethod
-    def filter_cms_E_within_bounds(top_cms: Union[list, np.ndarray], E_bounds: Tuple[float, float]) -> list:
+    def filter_cms_E_within_bounds(top_cms: Union[list, np.ndarray],
+                                   E_bounds: Tuple[float, float]) -> list:
         """
         Filter top_cms for cms with energies within E_bounds.
         """
         if E_bounds == (None, None):
             return top_cms
 
-        if len(top_cms[0]) == 6:
-            # array from mc_load=="all"
-            E = 3
-        else:
-            # array from mc_load=="crg"
-            E = 2
-
+        # index of energy data:
+        E = 3 if len(top_cms[0]) == 6 else 2   # 2 :: array from mc_load=="crg"
         filtered = []
         for i, ro in enumerate(top_cms[:, 0]):
             # ignore top cms out of bounds:
@@ -745,21 +813,26 @@ class MSout_np:
 
         return filtered
 
-    def get_topN_lists(self, N: int = 5, min_occ: float = MIN_OCC) -> Tuple[list, list]:
-        """Return two (unfiltered) lists:
-         - topN cms: list containing the first N most numerous cms with occ >= min_occ;
+    def get_topN_data(self, N: int = 5, min_occ: float = MIN_OCC, all_ms_out: bool = False) -> Tuple[list, dict]:
+        """Return a 2-tuple:
+         - top_cms (list): Containing the first N most numerous cms array with occ >= min_occ;
            NOTE: HIS charges are pseudo charges, see .get_conf_info for details.
-         - topN ms: list containing the most numerous conformer ms
-                    for each topN cms matched using their common index.
-        Both lists will be empty if all uniq_cms's occ are below the threshold.
+         - top_ms (dict): Dict with key as the index shared by the .all_cms and .all_ms arrays
+           (integer at position 0);
+           The dict values depend on 'all_ms_out': if False (default), they are the most numerous
+           conformer ms for the given index, else they are all the associated ms for that index.
+
+        NOTE: Both outputs will be empty if all uniq_cms's occupancies are below the threshold.
+
+        Call examples:
+          1. Using defaults: dict top_ms values are a single related conformer ms:
+            > top_cms, top_ms_dict = msout_np.get_topN_data()
+          2. With 'all_ms_out' set to True: dict values are all related conf ms:
+            > top_cms, top_ms_dict = msout_np.get_topN_data(all_ms_out=True)
         """
         if self.mc_load != "all":
-            print(
-                "Function '.get_topN_lists' returns the topN cms along with",
-                "the associated most numerous conformer ms, so argument",
-                "'mc_load' must be 'all', not",
-                self.mc_load,
-            )
+            print("CRITICAL: Function '.get_topN_data' returns the topN cms along with the",
+                  "associated conformer ms,\nso argument 'mc_load' must be 'all', not", self.mc_load)
             sys.exit(1)
 
         # recast input as they can be strings via the cli:
@@ -767,11 +840,11 @@ class MSout_np:
         min_occ = float(min_occ)
         print(f"Processing all_cms & all_ms for requested top {N} at {min_occ = :.1%}")
 
-        if N > len(self.uniq_cms):
-            N = len(self.uniq_cms)
+        if N > self.N_cms_uniq:
+            N = self.N_cms_uniq
             print("Requested topN greater than available: processing all.")
         top_cms = []
-        top_ms = []
+        top_ms = {}
         topN_cms = self.uniq_cms[:N]
         for i, ro in enumerate(topN_cms[:, 0]):
             # ignore top cms with occ below threshold:
@@ -780,87 +853,148 @@ class MSout_np:
             top_cms.append(topN_cms[i])
             # get the associated conf ms:
             matched_ms = self.all_ms[np.where(self.all_ms[:, 0] == ro)]
-            if len(matched_ms) > 1:
-                # get the most numerous:
-                top_ms.append(sorted(matched_ms, key=lambda x: x[-1], reverse=True)[0])
+            if all_ms_out:
+                top_ms[ro] = matched_ms
             else:
-                top_ms.append(matched_ms[0])
-
+                if len(matched_ms) > 1:
+                    # get the most numerous:
+                    top_ms[ro] = sorted(matched_ms, key=lambda x: x[-1], reverse=True)[0]
+                else:
+                    top_ms[ro] = matched_ms[0]
+        if top_cms:
+            print(f"Number of top cms returned: {len(top_cms):,}")
         return top_cms, top_ms
 
-    def top_cms_df(
-        self, top_cms: list, output_tauto: bool = True, cms_wc_format: bool = False
-    ) -> pd.DataFrame:
+    def top_cms_df(self, top_cms: list,
+                   output_tauto: bool = True,
+                   cms_wc_format: bool = False) -> pd.DataFrame:
         """
         Arguments:
-          - output_tauto: Set to False to keep the charge instead of the
-                          string tautomer.
-          - cms_wc_format: Set to True to get df formatted for weighted correlation
-                           crg ms analysis.
+          - output_tauto: Set to False to keep the charge instead of the string tautomer.
+          - cms_wc_format: Set to True to get df formatted for crg ms analysis with
+                           weighted correlation.
         """
+        fixed_free_res = None
+        n_ffres = 0
+        if not cms_wc_format:
+            fixed_free_res = self.get_fixed_res_of_interest_arr()
+            n_ffres = len(fixed_free_res) 
+            if not n_ffres:
+                fixed_free_res = None
+
         data = []
         for itm in top_cms:
-            fields = [itm[0]]
-            itm1 = deepcopy(itm[1])
-            for i, s in enumerate(itm1):
+            # [ idx, list(state), totE, averE, occ, count ]
+            #     0        1       2      3     4     5
+            fields = [itm[0]]   # the shared index
+            state = itm[1].copy()
+            for i, s in enumerate(state):
                 if self.cms_resids[i][:3] == "HIS":
-                    if s > 0:
-                        itm1[i] -= 1
-                        if output_tauto:
-                            s = HIS0_tautomers[s]
-                        else:
+                    if output_tauto:
+                        s = HIS0_tautomers[s]
+                    else:
+                        if s > 0:
+                            state[i] -= 1
                             s -= 1
                 fields.extend([s])
-            fields.extend([round(itm[3], 2), itm[5], round(itm[4], 2)])
-            fields.extend([sum(itm1) + self.background_crg])
+            if fixed_free_res is not None:
+                fields.extend(fixed_free_res[:,1])
+            fields.extend([round(itm[3], 2), sum(state) + self.background_crg, itm[5], round(itm[4], 4)])
             data.append(fields)
 
-        cols = ["idx"] + self.cms_resids + ["averE", "Count", "Occupancy", "SumCharge"]
-        df = pd.DataFrame(data, columns=cols)
-        if cms_wc_format:
-            # to match raicode's fmt
-            df.columns.name = "Residue"  # to match raicode's fmt
-            df.drop("averE", axis=1, inplace=True)
-            df.rename({"idx": "Order"}, axis=1, inplace=True)
-            df["Order"] = df.index + 1
-            df.set_index("Order", inplace=True)
+        if not cms_wc_format:
+            res_cols = self.cms_resids
 
-        return df
+            if fixed_free_res is not None:
+                # add fixed ionizable res
+                res_cols = res_cols + fixed_free_res[:,0].tolist() 
+                info_dat = ["tmp"] + ["free"] * len(self.cms_resids) + ["fixed"] * n_ffres + ["totals"] * 4
+            else:
+                # order as in data
+                info_dat = ["tmp"] + ["free"] * len(self.cms_resids) + ["totals"] * 4
+
+            # always remove trailing underscore
+            res_cols = [c.rstrip("_") for c in res_cols]
+            cols = ["idx"] + res_cols +  ["E", "sum_crg", "size", "occ"]
+       
+            df = pd.DataFrame(data, columns=cols)
+            df["res"] = df.index + 1
+            df.set_index("res", inplace=True)
+            df = df.T
+            df.columns.name = ""
+            df.reset_index(inplace=True)
+            df.rename(columns={"index":"residues"}, inplace=True)
+            df["info"] = info_dat
+            
+            return df
+        
+        # Format as in microstate_analysis_code/cms_analysis_wc.py of https://github.com/Raihancuny/python/
+        cols = ["Order"] + self.cms_resids + ["E", "SumCharge", "Count", "Occupancy"]
+        df = pd.DataFrame(data, columns=cols)
+        df.columns.name = "Residue"
+        df.drop("E", axis=1, inplace=True)
+        df["Order"] = df.index + 1
+
+        # move SumCharge to end:
+        new_cols = df.columns[:-3].tolist() + ["Count", "Occupancy", "SumCharge"]
+
+        return df[new_cols].set_index("Order")
+
+    def get_sampled_cms(self, size: int, seed: int = None) -> Union[np.ndarray, None]:
+        """
+        Return a random sample of crg microstates in a numpy.array, or None if MSout_np was
+        intanciated with 'mc_load', the class 'loading mode', set to 'conf' as no crg ms are
+        loaded in that case.
+        Args:
+            size (int): Sample size
+            seed (int, None): seed for random number generator; pass an integer for reproducibility
+        """
+        if self.mc_load == "conf":
+            print("Not applicable: 'get_sampled_cms' returns sampled crg microstates, but", 
+                  "MSout_np was instantiated with mc_load='conf'; 'mc_load' must be 'crg' or 'all'.")
+            return None
+        rng = np.random.default_rng(seed=seed)
+        indices = rng.integers(low=0, high=self.N_mc_lines, size=size, endpoint=True)
+        return self.all_cms[indices].copy()
+
+    def get_sampled_ms(self, size: int, seed: int = None) -> Union[np.ndarray, None]:
+        """
+        Return a random sample of conformer microstates in a numpy.array, or None if MSout_np was
+        intanciated with 'mc_load', the class 'loading mode', set to 'crg' as no conf ms are
+        loaded in that case.
+        Args:
+            size (int): Sample size
+            seed (int, None): seed for random number generator; pass an integer for reproducibility
+        """
+        if self.mc_load == "crg":
+            print("Not applicable: 'get_sampled_ms' returns sampled conformer microstates, but", 
+                  "MSout_np was instantiated with mc_load='crg'; 'mc_load' must be 'conf' or 'all'.")
+            return None
+        rng = np.random.default_rng(seed=seed)
+        indices = rng.integers(low=0, high=self.N_mc_lines, size=size, endpoint=True)
+        return self.all_ms[indices].copy()
 
     def get_free_res_aver_crg_df(self) -> pd.DataFrame:
         """Convert the conformer ms state in MSout_np.all_ms collection to crg
         and return the average charge of all free residue into a pandas.DataFrame.
         """
         charges_total = defaultdict(float)
-        ix_state = 0  # ms in ::  [state, state.e, count]
-        if self.mc_load == "all":
-            # ms in ::  [idx, state, state.e, count]
-            ix_state = 1
+        ix_state = 1 if self.mc_load == "all" else 0
 
         for _, ms in enumerate(self.all_ms):
             for _, (resid, crg) in enumerate(self.conf_info[ms[ix_state]][:, [1, -1]]):
                 charges_total[resid] += crg * ms[-1]
 
         return pd.DataFrame(
-            [(k, round(charges_total[k] / self.N_confms)) for k in charges_total], columns=["Residue", "crg"]
+            [(k, round(charges_total[k] / self.N_space)) for k in charges_total], columns=["Residue", "crg"]
         )
 
     def __str__(self):
-        common = (
-            f"\nConformers: {self.N_confs:,}\n"
-            f"Conformational state space: {self.N_confms:,}\n"
-            f"Free residues: {len(self.free_residues):,}\n"
-            f"Fixed residues: {len(self.fixed_iconfs):,}\n"
-        )
-        other = ""
-        if self.N_cms is not None:
-            other += f"Protonation microstates: {self.N_cms:,}\n"
-            other += f"Unique protonation microstates: {self.N_cms_uniq:,}\n"
-        if self.N_ms_uniq is not None:
-            other += f"Unique conformer microstates: {self.N_ms_uniq:,}\n"
-        if not other:
-            return common
-        return common + other
+        return (f"\nConformers: {self.N_confs:,}\n"
+                f"Conformational state space: {self.N_space:,}\n"
+                f"Free residues: {len(self.free_residues):,}\n"
+                f"Fixed residues: {len(self.fixed_iconfs):,}\n"
+                )
 
 
 class WeightedCorr:
@@ -1221,8 +1355,9 @@ def add_fixed_resoi_crg_to_topdf(
 
 
 def rename_reorder_df_cols(choose_res_data_df: pd.DataFrame) -> pd.DataFrame:
-    """Output a new df with resids in res_cols with this format: chain + 1-letter res code + seq num;
-    and with this group order: acid, polar, base, ub_q, non_res kinds.
+    """Output a new df with resids in res_cols with this format:
+    chain + 1-letter res code + seq num,  and with this group order:
+    acid, polar, base, ub_q, non_res kinds.
     """
     res_cols = choose_res_data_df.columns[0:-2].tolist()
     # termini
@@ -1559,8 +1694,9 @@ def crg_msa_with_correlation(args1: dict, args2: dict):
     logger.info(f"head3.lst: {str(h3_fp)}")
     logger.info(f"msout_file: {str(msout_fp)}")
 
-    user_resoi = args1.get("residue_kinds", IONIZABLES)
-    residue_kinds = sort_resoi_list(user_resoi)
+    residue_kinds = args1.get("residue_kinds", IONIZABLES)
+    if set(residue_kinds).difference(IONIZABLES):
+        residue_kinds = sort_resoi_list(residue_kinds)
     choose_res = args1.get("correl_resids")
 
     # instantiate the 'fast loader' class:

@@ -43,7 +43,7 @@
 # MICROSTATES FILE SELECTION
 # ========================================================================================
 # The 'msout file' that resides in mcce_dir/ms_out is named using the ph and eh points of
-# the titration, e.g.: pH7eH0ms.txt, or pH7.5eH30ms.txt.
+# the titration, e.g.: pH7eH0ms.txt, pH7.00eH0.00ms.txt., pH7.50eH30.00ms.txt.
 #
   msout_file = pH7eH0ms.txt
 

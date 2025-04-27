@@ -4,8 +4,6 @@
 # mcce_dir :: The directory of a MCCE run containing a ms_out subfolder :: Default: current directory.
 mcce_dir = 4lzt
 
-#list_head3_ionizables = true
-
 residue_kinds = ["ASP", "HEM", "PL9", "GLU", "HIS", "TYR", "NTR", "CTR"]
  
 # correl_resids :: list of conformer ids (among residue_kinds) to test for correlation.
@@ -13,7 +11,6 @@ correl_resids = [
 'NTRA0001_'
 'LYSA0001_'
 'ARGA0005_'
-
 'GLUA0007_'
 'LYSA0013_';
 'ARGA0014_'
